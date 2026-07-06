@@ -1852,7 +1852,8 @@ def test_concept_recall_json_shape(tmp_path: Path) -> None:
     # All 5 photonics docs surface as candidates.
     assert len(recall["candidate_docs"]) == 5
     for c in recall["candidate_docs"]:
-        assert set(c) == {"doc_id", "year", "score", "citation_proximity"}
+        assert set(c) == {"doc_id", "year", "score", "citation_proximity", "source"}
+        assert c["source"] == "relevance"
         # No evidence and no citation edges -> proximity is a no-op.
         assert c["citation_proximity"] == 0.0
     assert set(recall["year_buckets"]) == {"early", "middle", "recent"}
@@ -2050,6 +2051,68 @@ def test_concept_recall_proximity_no_evidence_falls_back(tmp_path: Path) -> None
     # Equal relevance + zero proximity -> deterministic doc_id order.
     order = [c["doc_id"] for c in recall["candidate_docs"]]
     assert order == sorted(order)
+
+
+def test_concept_recall_cocitation_surfaces_buried_paper(tmp_path: Path) -> None:
+    """A seminal doc a broad title query never ranks still surfaces as a
+    recall candidate when the concept's own literature co-cites it.
+
+    Regression guard for the Grillo/Pt-ALD miss: ``doc_seminal`` does not
+    match the ``photonics`` query (never a relevance candidate) but is cited
+    by two docs in the concept's relevance pool, so it must appear as a
+    ``source=cocitation`` candidate and be flagged missing when uncited.
+    """
+    from wikify.api import Bundle as BundleApi
+    from wikify.api import Corpus
+    from wikify.bundle.work.evidence import EvidenceRecord, append_evidence
+    from wikify.corpus.store import Store, transaction
+    from wikify.corpus.store.sync import project_documents
+    from wikify.models import Chunk, Document
+
+    bundle, corpus_root, docs = _recall_bundle(tmp_path)
+
+    # A doc whose text shares no term with the "photonics" query -> BM25 never
+    # ranks it, so it can only enter the candidate set via co-citation.
+    seminal = Document(
+        id="doc_seminal", source_path="src/doc_seminal.md", kind="md",
+        title="Aggregative growth mechanism", metadata={"year": 2016},
+        markdown_path="markdown/doc_seminal.md", image_dir="images/doc_seminal/",
+        n_chunks=1, n_tokens=20,
+    )
+    sem_body = "Aggregative growth and metal aggregation kinetics on supports."
+    corpus = Corpus(root=corpus_root)
+    store = Store(corpus.sqlite_path)
+    try:
+        with transaction(store.con):
+            project_documents(
+                store, [seminal],
+                {"doc_seminal": [Chunk(
+                    id="doc_seminal__c0000", doc_id="doc_seminal", ord=0,
+                    text=sem_body, char_span=(0, len(sem_body)),
+                    section_path=["S"], section_type="body",
+                )]},
+            )
+        store.fts_rebuild()
+    finally:
+        store.close()
+    # Two relevance-pool docs cite the seminal paper.
+    _add_reference_edges(corpus_root, "doc_2010", ["doc_seminal"])
+    _add_reference_edges(corpus_root, "doc_2018", ["doc_seminal"])
+
+    # Represent every photonics doc; the seminal paper stays uncited.
+    bundle_api = BundleApi.open(bundle)
+    for did, (cid, _year) in docs.items():
+        append_evidence(
+            bundle_api, "photonics",
+            [EvidenceRecord(chunk_id=cid, doc_id=did, status="active")],
+        )
+
+    recall = _run_recall(bundle, corpus_root)["recall"]
+    by_id = {c["doc_id"]: c for c in recall["candidate_docs"]}
+    assert "doc_seminal" in by_id, "co-citation must surface the buried paper"
+    assert by_id["doc_seminal"]["source"] == "cocitation"
+    assert by_id["doc_seminal"]["score"] == 0.0
+    assert "doc_seminal" in {m["doc_id"] for m in recall["missing_docs"]}
 
 
 def test_concept_recall_proximity_no_graph_edges_table(tmp_path: Path) -> None:

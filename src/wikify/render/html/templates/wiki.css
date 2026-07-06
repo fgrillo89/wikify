@@ -269,6 +269,11 @@ a.wiki-redlink:visited {
   color: #0645ad;
 }
 
+.sidebar-topics .sidebar-group-pages a.active {
+  font-weight: 600;
+  color: #202122;
+}
+
 .sidebar-group-pages li.sidebar-more a {
   font-size: 12px;
   color: #54595d;

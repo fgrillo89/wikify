@@ -37,6 +37,35 @@
     if (tgl) tgl.addEventListener('click', function() {
       document.getElementById('wiki-sidebar').classList.toggle('sidebar-open');
     });
+    // Keep the topic navigation stable across page loads: each page is a full
+    // reload, so without this the sidebar reverts to only the first group open.
+    // Persist manual toggles, and always expand the group holding the current
+    // page so a reader can browse a topic without re-opening it every click.
+    (function() {
+      var sidebar = document.getElementById('wiki-sidebar');
+      if (!sidebar) return;
+      var KEY = 'wikifyNavOpen', store = {};
+      try { store = JSON.parse(sessionStorage.getItem(KEY)) || {}; } catch (e) {}
+      var groups = sidebar.querySelectorAll('details[data-group]');
+      groups.forEach(function(d) {
+        var id = d.getAttribute('data-group');
+        if (Object.prototype.hasOwnProperty.call(store, id)) d.open = store[id];
+        d.addEventListener('toggle', function() {
+          store[id] = d.open;
+          try { sessionStorage.setItem(KEY, JSON.stringify(store)); } catch (e) {}
+        });
+      });
+      var here = decodeURIComponent(location.pathname.split('/').pop());
+      var links = sidebar.querySelectorAll('.sidebar-group-pages a');
+      for (var i = 0; i < links.length; i++) {
+        if (decodeURIComponent(links[i].getAttribute('href').split('/').pop()) === here) {
+          links[i].classList.add('active');
+          var p = links[i].closest('details');
+          while (p) { p.open = true; p = p.parentElement ? p.parentElement.closest('details') : null; }
+          break;
+        }
+      }
+    })();
   </script>
 </body>
 </html>

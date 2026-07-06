@@ -142,3 +142,37 @@ def test_run_sense_flags_committed_concepts(tmp_path: Path) -> None:
     assert mem["committed"] is True
     assert mem["band"] == "committed"
     assert any(p["slug"] == "memristor" for p in snap["committed_pages"])
+
+
+def test_run_sense_surfaces_sizing_and_seed_starvation(tmp_path: Path) -> None:
+    """A roster below the SEED floor must report ``seed_should_fire`` so a
+    resuming editor cannot mistake a starved roster for a saturated one.
+    Regression guard for the SEED/PERSON under-dispatch bug.
+    """
+    corpus = _make_corpus(tmp_path)
+    bundle = _init_bundle(tmp_path, corpus)
+    b = Bundle.open(bundle)
+    create_concept(b, page_id="Memristor")
+
+    res = runner.invoke(app, [
+        "run", "sense", "--run", str(bundle), "--corpus", str(corpus),
+    ])
+    assert res.exit_code == 0, res.output
+    snap = json.loads(res.output)
+
+    # Deterministic sizing knobs are surfaced (not left for the editor to
+    # re-derive from prose).
+    sizing = snap["sizing"]
+    assert sizing["n_docs"] >= 1
+    for k in ("target_min", "expected_pages", "expected_people", "wave_size"):
+        assert isinstance(sizing[k], int)
+
+    # One concept, far below target_min -> the roster is starved, not saturated.
+    waves = snap["waves"]
+    assert snap["roster"]["active_concepts"] == 1
+    assert waves["seed_should_fire"] is True
+    assert waves["roster_saturated"] is False
+    assert waves["seed_deficit"] == sizing["target_min"] - 1
+    # No people committed and the topical roster is tiny -> person gate shut.
+    assert snap["roster"]["n_people"] == 0
+    assert waves["person_gate_open"] is False

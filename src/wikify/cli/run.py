@@ -167,6 +167,33 @@ def cmd_show(
         )
 
 
+def _sizing_knobs(n_docs: int, n_chunks: int) -> dict:
+    """Corpus-scaled round knobs, the single source mirrored from
+    ``references/sizing.md``. Surfaced in ``run sense`` so the SEED floor
+    (``target_min``) and PERSON gate (``target_min/2``) are deterministic
+    signals, not values the editor must re-derive from prose each round.
+    """
+    import math
+
+    def clamp(x: float, lo: int, hi: int) -> int:
+        return int(max(lo, min(hi, x)))
+
+    d = max(int(n_docs), 1)
+    kc = max(int(n_chunks), 1)
+    log_d = math.log10(d)
+    wave_size = clamp(math.ceil(d / 80), 2, 12)
+    return {
+        "n_docs": int(n_docs),
+        "n_chunks": int(n_chunks),
+        "wave_size": wave_size,
+        "target_min": clamp(round(42 * log_d - 27), 10, 200),
+        "expected_pages": clamp(round(38 * log_d - 37), 5, 250),
+        "expected_people": clamp(round(4 * log_d - 3), 0, 30),
+        "max_rounds": clamp(round(kc / (wave_size * 25)) + 12, 12, 250),
+        "person_quota_multiplier": 2.0,
+    }
+
+
 @app.command("sense")
 def cmd_sense(
     corpus_dir: Path = typer.Option(..., "--corpus", help="Corpus root."),
@@ -216,12 +243,37 @@ def cmd_sense(
             "committed": r.slug in committed_slugs,
         })
 
-    cov = compute_coverage(bundle, Corpus.open(corpus_dir)).to_dict()
+    corpus = Corpus.open(corpus_dir)
+    cov = compute_coverage(bundle, corpus).to_dict()
     store = DataStore.open(bundle.root)
     try:
         data_cov = store.coverage()
     finally:
         store.close()
+
+    # Deterministic roster targets so a resuming editor is TOLD when the roster
+    # is still starved -- SEED/PERSON eligibility must not depend on the editor
+    # re-deriving sizing from prose each round (see references/sizing.md).
+    n_docs = len(cov.get("per_doc") or {})
+    n_chunks = cov.get("n_total") or 0
+    sizing = _sizing_knobs(n_docs, n_chunks)
+    active_concepts = sum(
+        v for k, v in bands.items() if k not in ("dropped", "parked")
+    )
+    n_people = sum(1 for p in committed_pages if p.get("kind") == "person")
+    target_min = sizing["target_min"]
+    expected_people = sizing["expected_people"]
+    seed_should_fire = active_concepts < target_min
+    person_gate_open = active_concepts >= target_min / 2
+    waves = {
+        "seed_should_fire": seed_should_fire,
+        "seed_deficit": max(0, target_min - active_concepts),
+        "person_gate_open": person_gate_open,
+        "person_should_fire": person_gate_open
+        and n_people < expected_people * sizing["person_quota_multiplier"],
+        "person_deficit": max(0, expected_people - n_people),
+        "roster_saturated": not seed_should_fire,
+    }
 
     snapshot = {
         "ok": True,
@@ -246,6 +298,15 @@ def cmd_sense(
             for k in ("n_points", "verified_ratio", "n_subjects",
                       "n_properties", "n_artifacts")
         },
+        "sizing": sizing,
+        "roster": {
+            "active_concepts": active_concepts,
+            "n_committed_articles": sum(
+                1 for p in committed_pages if p.get("kind") == "article"
+            ),
+            "n_people": n_people,
+        },
+        "waves": waves,
         "committed_pages": committed_pages,
     }
     typer.echo(json.dumps(snapshot, ensure_ascii=False))

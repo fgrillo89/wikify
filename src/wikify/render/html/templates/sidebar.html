@@ -1,7 +1,7 @@
 {% macro sidebar_group(group, root, is_open=false) %}
 {%- set MAX_SIDEBAR_PAGES = 12 -%}
 <li class="sidebar-group">
-  <details{% if is_open %} open{% endif %}>
+  <details data-group="{{ group.id }}"{% if is_open %} open{% endif %}>
     <summary>
       <span class="sidebar-disclosure" aria-hidden="true"></span>
       <span class="sidebar-group-title">{{ group.title }}</span>

@@ -395,6 +395,97 @@ def cmd_refresh(
     typer.echo(f"refresh complete: {paths.root}")
 
 
+@app.command("dedup")
+def cmd_dedup(
+    corpus_dir: Path | None = typer.Argument(None),
+    apply: bool = typer.Option(
+        False, "--apply",
+        help="Actually remove duplicates. Without it, only report the plan.",
+    ),
+    fmt: str = typer.Option("text", "--format"),
+) -> None:
+    """Collapse duplicate documents (same DOI, else same normalized title).
+
+    Duplicates -- a paper ingested twice under different filenames/citekeys,
+    including Windows 8.3 short names -- fragment its chunks and split its
+    incoming citations across ``doc_id``s. This keeps one canonical id per
+    group, redirects the duplicates' citation edges onto it, and drops the
+    rest. Dry-run by default; pass ``--apply`` to mutate the corpus. On
+    ``--apply`` the manifest and orphaned markdown files are pruned too, so
+    the corpus fingerprint changes and bundles see the update as drift.
+    """
+    import json as _json
+
+    from ..corpus.dedup import apply_dedup, plan_dedup
+    from ..corpus.store import Store
+
+    corpus = _resolve_corpus(corpus_dir)
+    fmt = resolve_format(fmt)
+
+    if not apply:
+        store = Store(corpus.sqlite_path)
+        try:
+            plan = plan_dedup(store)
+        finally:
+            store.close()
+        n_dupes = sum(len(g["duplicates"]) for g in plan)
+        if fmt == "json":
+            typer.echo(_json.dumps(
+                {"ok": True, "apply": False, "n_groups": len(plan),
+                 "n_duplicates": n_dupes, "groups": plan}
+            ))
+            return
+        typer.echo(f"dedup plan: {len(plan)} groups, {n_dupes} duplicate docs")
+        for g in plan[:50]:
+            typer.echo(f"  keep {g['canonical']}")
+            for d in g["duplicates"]:
+                typer.echo(f"    drop {d}")
+        typer.echo("(dry run; pass --apply to remove)")
+        return
+
+    result = apply_dedup(corpus)
+    removed = set(result["removed"])
+
+    # Prune the manifest sources and delete orphaned markdown files so the
+    # on-disk corpus matches the store (and the fingerprint moves).
+    pruned_manifest = 0
+    if corpus.manifest_path.is_file():
+        manifest = _json.loads(corpus.manifest_path.read_text(encoding="utf-8"))
+        sources = manifest.get("sources")
+        if isinstance(sources, dict):
+            kept = {
+                k: v for k, v in sources.items()
+                if v.get("doc_id") not in removed
+            }
+            pruned_manifest = len(sources) - len(kept)
+            manifest["sources"] = kept
+            corpus.manifest_path.write_text(
+                _json.dumps(manifest, indent=2), encoding="utf-8"
+            )
+    deleted_md = 0
+    for doc_id in removed:
+        md = corpus.markdown_dir / f"{doc_id}.md"
+        if md.is_file():
+            md.unlink()
+            deleted_md += 1
+
+    summary = {
+        "ok": True, "apply": True,
+        "n_groups": len(result["groups"]),
+        "n_removed": len(removed),
+        "pruned_manifest": pruned_manifest,
+        "deleted_markdown": deleted_md,
+    }
+    if fmt == "json":
+        typer.echo(_json.dumps(summary))
+        return
+    typer.echo(
+        f"dedup applied: removed {len(removed)} docs across "
+        f"{len(result['groups'])} groups; pruned {pruned_manifest} manifest "
+        f"sources, deleted {deleted_md} markdown files."
+    )
+
+
 @app.command("check")
 def cmd_check(
     corpus_dir: Path | None = typer.Argument(
