@@ -359,3 +359,53 @@ def test_release_gpu_memory_no_torch(monkeypatch: pytest.MonkeyPatch) -> None:
 
     # Just call it — must not raise even on a CPU-only or torch-less host.
     docling._release_gpu_memory()
+
+
+def _make_pdf(path: Path, text: str) -> Path:
+    """Write a one-page PDF containing *text* (skips the test if PyMuPDF is
+    unavailable). Text is laid out as wrapped lines so it stays on-page and is
+    fully recoverable by ``get_text``."""
+    fitz = pytest.importorskip("fitz")
+    doc = fitz.open()
+    page = doc.new_page()
+    words = text.split()
+    lines, cur = [], ""
+    for w in words:
+        if len(cur) + len(w) + 1 > 60:
+            lines.append(cur)
+            cur = w
+        else:
+            cur = f"{cur} {w}".strip()
+    if cur:
+        lines.append(cur)
+    y = 72
+    for line in lines:
+        page.insert_text((72, y), line)
+        y += 14
+    doc.save(str(path))
+    doc.close()
+    return path
+
+
+def test_text_fingerprint_matches_same_paper_bytes_differ(tmp_path: Path) -> None:
+    """Two byte-different PDFs of the same paper (e.g. a proper name and an
+    8.3 short name) share a text fingerprint, so the second is dropped before
+    parsing; a different paper and a too-short PDF do not collide."""
+    body = (
+        "Understanding and Controlling the Aggregative Growth of Platinum "
+        "Nanoparticles in Atomic Layer Deposition. This work studies the "
+        "nucleation and coalescence of platinum nanoparticles on titania "
+        "supports during thermal ALD with MeCpPtMe3 and oxygen."
+    )
+    a = _make_pdf(tmp_path / "[Real2017] Aggregative growth.pdf", body)
+    b = _make_pdf(tmp_path / "_2017G~1.PDF", body)          # same text, 8.3 name
+    other = _make_pdf(tmp_path / "[Other2018] Different.pdf", body.replace(
+        "Platinum", "Ruthenium").replace("platinum", "ruthenium"))
+    short = _make_pdf(tmp_path / "cover.pdf", "Title page.")
+
+    fp_a = pipeline.text_fingerprint(a)
+    assert fp_a is not None
+    assert pipeline.text_fingerprint(b) == fp_a          # duplicate collapses
+    assert pipeline.text_fingerprint(other) != fp_a      # distinct paper stays
+    assert pipeline.text_fingerprint(short) is None      # too little text
+    assert pipeline.text_fingerprint(tmp_path / "x.docx") is None  # non-pdf

@@ -229,6 +229,34 @@ def content_hash(path: Path) -> str:
     return hashlib.sha1(path.read_bytes()).hexdigest()[:12]
 
 
+def text_fingerprint(path: Path) -> str | None:
+    """A cheap content fingerprint of a PDF's opening text, for catching the
+    same paper saved as byte-different copies (e.g. a proper filename and a
+    Windows 8.3 short name) BEFORE the expensive parser runs.
+
+    Reads the first two pages via PyMuPDF, normalizes to lowercase
+    alphanumerics, and hashes the leading 1000 chars. Returns ``None`` for
+    non-PDFs, on any read failure, or when too little text is recovered to be
+    distinctive -- so distinct papers (and a paper vs its supporting-info PDF,
+    whose first pages differ) never collide. Best-effort: never raises.
+    """
+    if path.suffix.lower() != ".pdf":
+        return None
+    try:
+        import fitz  # PyMuPDF
+    except ImportError:
+        return None
+    try:
+        with fitz.open(path) as doc:
+            text = "".join(doc[i].get_text() for i in range(min(2, doc.page_count)))
+    except Exception:  # noqa: BLE001 - best-effort probe, any failure -> skip
+        return None
+    norm = re.sub(r"[^a-z0-9]", "", text.lower())[:1000]
+    if len(norm) < 200:
+        return None
+    return hashlib.sha1(norm.encode("utf-8")).hexdigest()[:12]
+
+
 def image_slug(doc_id: str) -> str:
     """Filesystem-safe image folder name derived from doc_id.
 
@@ -1310,6 +1338,10 @@ def _prepare_change_set(
         deduped: list[Path] = []
         dedup_aliases: list[tuple[str, str, str]] = []  # (sid, h, did)
         seen_this_run: set[str] = set()
+        # Same paper as byte-different copies (proper name + 8.3 short name)
+        # shares no content hash, so also fingerprint the opening PDF text and
+        # skip a match BEFORE parsing -- the parser never sees the duplicate.
+        text_fp_to_doc: dict[str, str] = {}
         for src in change_set.to_parse:
             try:
                 h = content_hash(src)
@@ -1331,8 +1363,17 @@ def _prepare_change_set(
                 print(f"  [skip-cross] {src.name}", file=sys.stderr)
                 continue
 
+            tfp = text_fingerprint(src)
+            if tfp is not None and tfp in text_fp_to_doc:
+                dedup_aliases.append((sid, h, text_fp_to_doc[tfp]))
+                print(f"  [skip-textdup] {src.name}", file=sys.stderr)
+                continue
+
             seen_this_run.add(h)
-            hash_to_doc[h] = doc_id_for(src)
+            did = doc_id_for(src)
+            hash_to_doc[h] = did
+            if tfp is not None:
+                text_fp_to_doc[tfp] = did
             deduped.append(src)
         change_set.to_parse = deduped
 
