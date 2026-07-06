@@ -1800,6 +1800,30 @@ def test_work_refine_candidates_flags_new_siblings(tmp_path: Path) -> None:
     by0 = {it["slug"]: it for it in json.loads(res0.output)["items"]}
     assert "a" not in by0  # signal disabled and no other signal fires
 
+    # A legacy page (no siblings_seen key recorded at all) is treated as
+    # converged by default -> not flagged, so an old wiki doesn't flood.
+    create_concept(bundle, page_id="X", slug="x", kind="article")
+    append_evidence(bundle, "x", [
+        EvidenceRecord(chunk_id="x_c", doc_id="shared_d", status="active")])
+    xcard = load_card(bundle, "x")
+    xcard.front["status"] = "committed"
+    save_card(bundle, "x", xcard)
+    append_event(bundle, Event(
+        run_id=run_id, type="page_committed", actor="test", page_id="X",
+        data={"slug": "x", "kind": "article", "evidence_count": 1,
+              "evidence_total": 1, "data_artifacts_seen": []}))  # no siblings_seen
+
+    def _refine_siblings(*extra: str) -> dict:
+        r = runner.invoke(app, [
+            "work", "refine-candidates", "--run", str(bundle_dir),
+            "--format", "json", "--min-new-siblings", "4", *extra])
+        assert r.exit_code == 0, r.output
+        return {it["slug"]: it for it in json.loads(r.output)["items"]}
+
+    assert "new_siblings" not in _refine_siblings().get("x", {}).get("reason", "")
+    # Opt-in legacy drain surfaces it (all its neighbours become "new").
+    assert "new_siblings" in _refine_siblings("--include-legacy-siblings")["x"]["reason"]
+
 
 def test_doc_sharing_committed_pages_helper(tmp_path: Path) -> None:
     """The commit-time sibling helper returns committed pages sharing a source

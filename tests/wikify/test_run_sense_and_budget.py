@@ -47,6 +47,35 @@ def _make_corpus(tmp_path: Path) -> Path:
     return corpus
 
 
+def test_run_sense_expected_people_scales_with_notable_authors(
+    tmp_path: Path,
+) -> None:
+    """``expected_people`` follows ``0.5 * n_notable_authors`` (corpus authors
+    with h_index >= 4) when that beats the log(D) fit; ``run sense`` surfaces
+    the count."""
+    corpus = _make_corpus(tmp_path)
+    con = sqlite3.connect(str(corpus / "wikify.db"))
+    con.execute(
+        "CREATE TABLE node_metrics (graph_name TEXT, node_type TEXT, "
+        "node_id TEXT, metric TEXT, value REAL, computed_at TEXT, "
+        "params_json TEXT)"
+    )
+    rows = [("g", "author", f"a{i}", "h_index", 6.0, "", None) for i in range(10)]
+    rows += [("g", "author", f"b{i}", "h_index", 2.0, "", None) for i in range(5)]
+    con.executemany("INSERT INTO node_metrics VALUES (?,?,?,?,?,?,?)", rows)
+    con.commit()
+    con.close()
+
+    bundle = _init_bundle(tmp_path, corpus)
+    res = runner.invoke(app, [
+        "run", "sense", "--run", str(bundle), "--corpus", str(corpus),
+    ])
+    assert res.exit_code == 0, res.output
+    sizing = json.loads(res.output)["sizing"]
+    assert sizing["n_notable_authors"] == 10   # h_index >= 4
+    assert sizing["expected_people"] == 5      # round(0.5 * 10)
+
+
 # --------------------------------------------------------------- budget (F11)
 
 def _shown_spent(bundle: Path) -> int:

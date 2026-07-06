@@ -149,10 +149,13 @@ targets to the plan in order, removing them from later bands.
    encyclopedia. `new_siblings` dominates the **settle phase** (roster
    saturated, coverage plateaued): early pages were written when the wiki
    was small and are under-connected once it fills in, so refining them
-   weaves in the now-committed neighbours. Dispatch at most `min(2,
-   wave_size)` refine Tasks per round (raise to `wave_size` when draining a
-   large one-time `new_siblings` backlog on a saturated roster), one per top
-   candidate; slug-disjoint from all other waves by construction (refine
+   weaves in the now-committed neighbours. Pages committed BEFORE this
+   feature carry no `siblings_seen` snapshot and are treated as converged by
+   default (so a legacy wiki never floods the STOP CHECK); to cross-link
+   them once, run `refine-candidates --include-legacy-siblings` and drain
+   that backlog at up to `wave_size` refine Tasks/round before finalizing.
+   Otherwise dispatch at most `min(2, wave_size)` refine Tasks per round,
+   one per top candidate; slug-disjoint from all other waves by construction (refine
    targets committed slugs, which WRITE/GROW never touch). A refined page
    converges: its fresh `page_committed` event resets its baseline and
    records the current artifacts and sibling set, so it won't re-trigger
