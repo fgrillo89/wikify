@@ -1597,6 +1597,12 @@ def cmd_refine_candidates(
         help="Flag a page when this many topical-neighbour pages committed "
              "after it (cross-link refine). 0 disables the signal.",
     ),
+    include_legacy_siblings: bool = typer.Option(
+        False, "--include-legacy-siblings",
+        help="Also flag pre-feature pages that never recorded a siblings_seen "
+             "snapshot (a one-time retroactive cross-link drain). Off by "
+             "default so a legacy wiki does not flood the STOP CHECK.",
+    ),
     fmt: str = typer.Option("auto", "--format", help="json | compact | auto"),
 ) -> None:
     """List committed pages whose live evidence outgrew their write-time snapshot.
@@ -1623,7 +1629,10 @@ def cmd_refine_candidates(
     absent from its ``siblings_seen`` snapshot -- a page written when the wiki
     was small is under-connected once it fills in, so a re-draft weaves in the
     now-committed neighbours. Re-committing records the current neighbour set
-    and converges. Deterministic and token-light (no chunk text).
+    and converges. A page with NO snapshot predates this feature and is
+    treated as converged (not flagged) unless ``--include-legacy-siblings`` is
+    passed for a one-time retroactive cross-link drain. Deterministic and
+    token-light (no chunk text).
     """
     import sys
 
@@ -1717,7 +1726,16 @@ def cmd_refine_candidates(
                 q for q, qd in docsets.items()
                 if q != s and (qd & mine)
             }
-            new_siblings = sorted(current_sibs - seen_siblings.get(s, set()))
+            # A page with no recorded snapshot predates this feature. Treat its
+            # neighbours as already-seen (converged) unless the caller opts into
+            # a one-time legacy drain, so an old wiki never floods the queue.
+            if s in seen_siblings:
+                seen = seen_siblings[s]
+            elif include_legacy_siblings:
+                seen = set()
+            else:
+                seen = current_sibs
+            new_siblings = sorted(current_sibs - seen)
 
         siblings_hit = len(new_siblings) >= min_new_siblings > 0
         if not (by_ratio or by_delta or new_artifacts or siblings_hit):
