@@ -1325,6 +1325,34 @@ _AUTHOR_NOISE = {
 }
 
 
+# Journal editorial-workflow date lines ("Received 5th July 2016",
+# "Accepted 2nd October 2016", "Revised ...") sit in the same layout band
+# as the author byline on RSC / Wiley / Nature PDFs. When a PDF has no
+# ``[YYYY Author]`` filename hint the author scanner falls back to the
+# heading heuristic and can latch onto these lines: "Received 5th July"
+# clears every existing guard (only "July" is in ``_AUTHOR_NOISE``, and
+# the digit-at-end check misses the mid-token "5th"). Two structural
+# markers identify such a line — an opening submission verb, or an
+# ordinal date token — and neither ever appears in a real name.
+_EDITORIAL_WORKFLOW_WORDS = frozenset({
+    "received", "accepted", "revised", "resubmitted", "submitted",
+    "published", "communicated", "corrected", "reviewed",
+})
+_ORDINAL_DATE_RE = re.compile(r"\b\d{1,2}(?:st|nd|rd|th)\b", re.IGNORECASE)
+
+
+def _looks_like_editorial_line(name: str) -> bool:
+    """True when a candidate author is a journal editorial-workflow date
+    line ("Received 5th July", "Accepted 2nd October") rather than a byline.
+    """
+    if not name:
+        return False
+    first = name.split()[0].lower().strip(".,;:")
+    if first in _EDITORIAL_WORKFLOW_WORDS:
+        return True
+    return bool(_ORDINAL_DATE_RE.search(name))
+
+
 def _is_valid_author(name: str) -> bool:
     name = name.strip()
     if not name or len(name) < 2:
@@ -1380,6 +1408,10 @@ def _is_valid_author(name: str) -> bool:
         return False
     # Reject names containing common non-name words (title/topic fragments).
     if _has_non_name_words(name):
+        return False
+    # Reject journal editorial-workflow date lines ("Received 5th July",
+    # "Accepted 2nd October") that publishers print in the byline band.
+    if _looks_like_editorial_line(name):
         return False
     return True
 
@@ -1647,6 +1679,10 @@ def _parse_author_line(line: str) -> list[str]:
         # trailing page-number strip) otherwise fool the
         # surname-anchored scanner. Author names never contain ":".
         if ":" in part:
+            continue
+        # Reject journal editorial-workflow date lines ("Received 5th
+        # July", "Accepted 2nd October") printed in the byline band.
+        if _looks_like_editorial_line(part):
             continue
         names.append(part)
     return names
