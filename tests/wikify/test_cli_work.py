@@ -2373,3 +2373,53 @@ def test_concept_recall_proximity_no_graph_edges_table(tmp_path: Path) -> None:
 
     recall = _run_recall(bundle, corpus_root)["recall"]
     assert all(c["citation_proximity"] == 0.0 for c in recall["candidate_docs"])
+
+
+# ---------------------------------------------------------------------------
+# Person-path gather quality: front-matter rejection + contribution priority
+# ---------------------------------------------------------------------------
+
+
+class TestPersonGatherHelpers:
+    """The PERSON build-evidence path must feed the maturity gate
+    (n_quoted_contribution_chunks >= 3) with substantive claim sentences,
+    not publisher front-matter that escaped is_boilerplate at ingest.
+    """
+
+    def test_frontmatter_rejected(self):
+        from wikify.cli.work import _person_frontmatter
+        assert _person_frontmatter("Cite as: J. Vac. Sci. Technol. A 38, 020804")
+        assert _person_frontmatter(
+            "Special Topic Collection: Reproducibility Challenges and Solutions"
+        )
+        assert _person_frontmatter("Submitted: 29 November 2019")
+        assert _person_frontmatter("Accepted: 21 January 2020")
+        assert _person_frontmatter("doi: 10.1116/1.5140603")
+        assert _person_frontmatter("https://doi.org/10.1116/1.5140603")
+
+    def test_real_contribution_text_kept(self):
+        from wikify.cli.work import _person_frontmatter
+        # A genuine contribution sentence must NOT be flagged front-matter.
+        assert not _person_frontmatter(
+            "We developed a reactor-scale simulation framework for ALD and ALE "
+            "that predicts saturation profiles in high-aspect-ratio features."
+        )
+        assert not _person_frontmatter(
+            "Puurunen and co-workers introduced the PillarHall lateral "
+            "high-aspect-ratio test structure for conformality analysis."
+        )
+
+    def test_contribution_hint_matches_first_and_third_person(self):
+        from wikify.cli.work import _PERSON_CONTRIB_HINT_RE
+        for t in (
+            "we develop a model",
+            "she proposed a mechanism",
+            "the authors demonstrated growth",
+            "this work introduces a method",
+            "established the saturation regime",
+        ):
+            assert _PERSON_CONTRIB_HINT_RE.search(t), t
+        # A pure byline / affiliation line carries no contribution verb.
+        assert not _PERSON_CONTRIB_HINT_RE.search(
+            "Angel Yanguas-Gil, Applied Materials Division, Argonne"
+        )

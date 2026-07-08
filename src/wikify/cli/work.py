@@ -637,6 +637,33 @@ def _has_identity_signal(text: str) -> bool:
     return bool(_IDENTITY_SIGNAL_RE.search(text or ""))
 
 
+# Person-path gather quality. The maturity gate counts chunks whose quote
+# carries an attributed-contribution verb (see ``_person_components`` in
+# ``bundle.work.maturity``; the regex there already accepts first-person
+# "we develop / demonstrate / propose" forms). Publisher front-matter that
+# escaped ``is_boilerplate`` at ingest -- author bylines, "Cite as ...",
+# "Special (Topic) Collection", submission/acceptance dates, DOI lines --
+# otherwise fills the per-doc cap before those substantive claims, starving
+# the gate (observed: a 4-paper modelling author gathered 0 contribution
+# chunks). For the person path we (a) reject that front-matter even when it
+# was not flagged boilerplate, and (b) surface contribution-bearing chunks
+# from the author's own docs first so the gate is fed substance, not blurb.
+_PERSON_CONTRIB_HINT_RE = re.compile(
+    r"\b(?:propos|introduc|develop|invent|discover|demonstrat|report|"
+    r"formulat|show|establish)(?:e|es|ed|s|n|ing)?\b",
+    re.IGNORECASE,
+)
+_PERSON_FRONTMATTER_RE = re.compile(
+    r"(?im)(?:^\s*cite\s+(?:as|this)\b|special\s+(?:topic\s+)?collection|"
+    r"^\s*citation:|\bsubmitted:\s|\baccepted:\s|\breceived:\s|"
+    r"\bdoi:\s*10\.|\bhttps?://doi\.org)",
+)
+
+
+def _person_frontmatter(text: str) -> bool:
+    return bool(_PERSON_FRONTMATTER_RE.search(text or ""))
+
+
 def _person_name_variants(card) -> set[str]:
     """Lowercased strings that specifically name the target author.
 
@@ -1204,6 +1231,7 @@ def cmd_build_evidence(
         "rejected_doc_cap": 0,
         "passes": 0,
         "identity_context_records": 0,
+        "rejected_frontmatter": 0,
     }
 
     def try_chunk(row, *, score: float, source: str) -> bool:
@@ -1218,6 +1246,11 @@ def cmd_build_evidence(
             return False
         if _matches_never_cite(text):
             stats["rejected_never_cite"] += 1
+            return False
+        # Person path: drop publisher front-matter that escaped is_boilerplate
+        # so it cannot occupy the per-doc cap ahead of substantive claims.
+        if person_kind and _person_frontmatter(text):
+            stats["rejected_frontmatter"] += 1
             return False
         if any(r["chunk_id"] == row["chunk_id"] for r in records):
             return False
@@ -1247,7 +1280,19 @@ def cmd_build_evidence(
         doc_id = _resolve_doc_id(corpus, handle)
         if doc_id is None:
             continue
-        seed_chunks = fetch_seed_chunks(doc_id, per_doc_cap)
+        if person_kind:
+            # Pull a wider slice of the author's own doc and try
+            # contribution-bearing chunks FIRST, so the per-doc cap fills
+            # with the attributed claims the maturity gate counts rather
+            # than whatever descriptive text leads the document.
+            seed_chunks = sorted(
+                fetch_seed_chunks(doc_id, per_doc_cap * 4),
+                key=lambda r: 0
+                if _PERSON_CONTRIB_HINT_RE.search(r["text"] or "")
+                else 1,
+            )
+        else:
+            seed_chunks = fetch_seed_chunks(doc_id, per_doc_cap)
         for row in seed_chunks:
             if len(records) >= target:
                 break
@@ -1365,6 +1410,7 @@ def cmd_build_evidence(
         f"identity={stats['identity_context_records']} "
         f"rejected=bp{stats['rejected_boilerplate']}/"
         f"nc{stats['rejected_never_cite']}/short{stats['rejected_short']}/"
+        f"fm{stats['rejected_frontmatter']}/"
         f"cap{stats['rejected_doc_cap']})"
     )
 

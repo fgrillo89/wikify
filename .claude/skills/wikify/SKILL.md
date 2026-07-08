@@ -479,19 +479,43 @@ When invoked on a bundle that already has `round_completed` events:
 3. If equal -> jump straight into SENSE and re-enter precedence as if
    mid-loop. Typically one CURATE pass and stop with
    `no_candidate_action`.
-4. If different:
+4. If different (a body of new literature arrived — the common re-entry
+   case, e.g. an author's papers were just ingested), run the **ENRICH
+   pass BEFORE the normal precedence**. A drift re-entry is not just a
+   SEED opportunity: most new docs are relevant to pages that already
+   exist, and unless their evidence is routed into those dossiers the new
+   literature never reaches the committed pages (the REFINE growth trigger
+   keys on a dossier's evidence outgrowing its write-time snapshot, so a
+   doc that never enters a dossier never triggers a rewrite). Steps:
    - Emit `corpus_drift_detected` with old + new fingerprints.
    - Compute `new_doc_ids = corpus_doc_ids - union(notebook.covered_docs)`.
-   - For each new doc, run a one-shot haiku Task asking "does this doc
-     materially overlap any existing dossier slug?" with the dossier
-     index summary as context. Append `new_doc_action_needed=true` to
-     any matched dossier (via a CLI subcommand or direct yaml edit
-     through `notebook` helpers).
-   - Queue unmatched docs for the next SEED wave (P1 on those docs).
-   - After the new docs are absorbed, re-stamp the stored fingerprint
-     so drift does not re-fire next round:
+   - **Route each new doc to the dossiers it belongs in (ENRICH).** For
+     each new doc, find its most-relevant existing slugs — cheaply via
+     `wikify corpus find --in-doc <doc> --rank all` against each candidate
+     slug's title/aliases, or a one-shot haiku classifier over the dossier
+     index for ambiguous docs — and for every match GROW that dossier with
+     the doc's chunks: `wikify work build-evidence <slug> --seed-docs
+     '[<doc_id>]' --corpus <corpus> --run <bundle>`, then emit the growth
+     event `wikify work add evidence <slug> --round <N> --run <bundle>`
+     (build-evidence does not self-emit it). A committed slug that gains
+     evidence this way becomes a `refine-candidate` (reason `ratio`/`delta`)
+     and the REFINE wave rewrites its page to cover and cite the new work;
+     an uncommitted slug advances toward its gate. One new doc may enrich
+     several slugs. This is what makes added literature actually change the
+     wiki rather than sit inert in the corpus.
+   - **Seed the genuinely-new concepts.** Docs that matched no existing
+     slug (they introduce a topic the wiki lacks) go to the next SEED wave
+     (P1 over those docs). New notable authors among the new docs open the
+     PERSON wave (their contribution evidence now exists).
+   - After the new docs are absorbed (enriched + seeded), re-stamp the
+     stored fingerprint so drift does not re-fire next round:
      `wikify run set --corpus-fingerprint <new> --run <bundle>` (the
-     `<new>` value is `context_show().health.fingerprint`).
+     `<new>` value is `context_show().health.fingerprint`). Re-stamp only
+     AFTER the ENRICH GROWs, so a crash mid-pass re-fires drift and retries
+     rather than silently skipping unabsorbed docs.
+   Then enter the normal precedence (WRITE/REFINE/GROW/…): the REFINE wave
+   drains the pages the ENRICH pass grew, and WRITE commits any new concept
+   or person that crossed its gate.
 
 ## Finalize (after STOP)
 
