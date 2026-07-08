@@ -1686,7 +1686,8 @@ def cmd_refine_candidates(
         try:
             for _slug, _doc in _con.execute(
                 "SELECT p.slug, e.doc_id FROM wiki_evidence e "
-                "JOIN wiki_pages p ON p.page_id = e.page_id"
+                "JOIN wiki_pages p ON p.page_id = e.page_id "
+                "WHERE p.kind IN ('article', 'person')"
             ):
                 if _slug and _doc:
                     doc_slugs.setdefault(_doc, set()).add(_slug)

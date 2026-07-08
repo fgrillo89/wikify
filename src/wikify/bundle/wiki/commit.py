@@ -188,7 +188,8 @@ def doc_sharing_committed_pages(
         rows = con.execute(
             "SELECT DISTINCT p.slug FROM wiki_evidence e "
             "JOIN wiki_pages p ON p.page_id = e.page_id "
-            f"WHERE e.doc_id IN ({placeholders}) AND p.slug != ?",
+            f"WHERE e.doc_id IN ({placeholders}) AND p.slug != ? "
+            "AND p.kind IN ('article', 'person')",
             [*ids, slug],
         ).fetchall()
     except sqlite3.Error:

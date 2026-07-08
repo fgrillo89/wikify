@@ -1745,7 +1745,9 @@ def test_work_refine_candidates_flags_new_data(tmp_path: Path) -> None:
     assert _refine()["n_candidates"] == 0
 
 
-def _project_committed_to_wiki_db(bundle, slug: str, doc_ids: list[str]) -> None:
+def _project_committed_to_wiki_db(
+    bundle, slug: str, doc_ids: list[str], kind: str = "article"
+) -> None:
     """Insert a committed page's ``wiki_evidence`` rows (the indexed doc-id
     projection the cross-link signal reads) into the bundle's wiki.db."""
     import sqlite3
@@ -1760,7 +1762,7 @@ def _project_committed_to_wiki_db(bundle, slug: str, doc_ids: list[str]) -> None
             "chunk_id TEXT, doc_id TEXT, quote TEXT)")
         con.execute(
             "INSERT OR REPLACE INTO wiki_pages (page_id, slug, kind) VALUES (?,?,?)",
-            (slug, slug, "article"))
+            (slug, slug, kind))
         for i, d in enumerate(doc_ids):
             con.execute(
                 "INSERT INTO wiki_evidence (page_id, marker, chunk_id, doc_id, quote)"
@@ -1876,6 +1878,8 @@ def test_doc_sharing_committed_pages_helper(tmp_path: Path) -> None:
     _mk("b", "d1")               # committed, shares d1 -> included
     _mk("c", "d2")               # committed, different doc -> excluded
     _mk("d", "d1", committed=False)  # shares d1 but not committed -> excluded
+    # A kind='data' artifact page sharing d1 is NOT a topical sibling.
+    _project_committed_to_wiki_db(bundle, "dtable", ["d1"], kind="data")
 
     assert doc_sharing_committed_pages(bundle, "a", ["d1"]) == ["b"]
     assert doc_sharing_committed_pages(bundle, "a", []) == []

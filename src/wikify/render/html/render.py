@@ -1364,9 +1364,11 @@ _FENCED_CODE_RE = re.compile(
     r"(?ms)^(?P<fence>`{3,}|~{3,})[^\n]*\n.*?^(?P=fence)\s*$",
 )
 
-# Math spans (display + inline) for escape normalization.
+# Math spans for escape normalization. The inline ``$...$`` form excludes a
+# leading space or digit so it does not swallow prose dollar amounts
+# (``costs $5 to $10``); display/bracket forms are unambiguous.
 _MATH_SPAN_RE = re.compile(
-    r"\$\$.*?\$\$|\$[^$\n]+?\$|\\\(.+?\\\)|\\\[.+?\\\]", re.DOTALL,
+    r"\$\$.*?\$\$|\$(?![\s\d])[^$\n]+?\$|\\\(.+?\\\)|\\\[.+?\\\]", re.DOTALL,
 )
 _OVERESCAPED_MATH_RE = re.compile(r"\\\\(?=[A-Za-z])")
 
@@ -1380,16 +1382,32 @@ def _normalize_math_escapes(body: str) -> str:
     plain text. A ``\\`` immediately before a letter is never a valid line
     break (that is followed by whitespace, a brace, or ``[``), so collapsing
     it is safe and only touches the over-escape symptom. Applied inside math
-    spans only, so prose backslashes are untouched.
+    spans only (fenced code excised first), so prose backslashes and code
+    examples are untouched.
     """
-    return _MATH_SPAN_RE.sub(
-        lambda m: _OVERESCAPED_MATH_RE.sub(lambda _m: "\\", m.group(0)), body,
+    placeholders: list[str] = []
+
+    def _stash(m: re.Match[str]) -> str:
+        placeholders.append(m.group(0))
+        return f"\x00M{len(placeholders) - 1}\x00"
+
+    stashed = _FENCED_CODE_RE.sub(_stash, body)
+    fixed = _MATH_SPAN_RE.sub(
+        lambda m: _OVERESCAPED_MATH_RE.sub(lambda _m: "\\", m.group(0)), stashed,
+    )
+    return re.sub(
+        r"\x00M(\d+)\x00", lambda m: placeholders[int(m.group(1))], fixed
     )
 
 
 _ACRONYM_PAREN_RE = re.compile(r"\(([A-Z][A-Za-z0-9]{1,6})\)")
 # A word token, optionally wrapped in markdown emphasis (**bold**/*italic*).
 _GLOSS_WORD_RE = re.compile(r"[*_]{0,2}[A-Za-z][A-Za-z*_-]*")
+# Link markup whose inner text must NOT be gloss-rewritten (a ``[[..(ALD)]]``
+# wikilink target or a ``[text](url)`` / ``![alt](src)`` link/image).
+_GLOSS_LINK_RE = re.compile(r"\[\[.*?\]\]|!?\[[^\]]*\]\([^)]*\)")
+# Bounded lookback for the gloss scan (an expansion is only a few words).
+_GLOSS_LOOKBACK = 400
 _GLOSS_STOPWORDS = frozenset(
     {"of", "the", "and", "for", "a", "an", "in", "on", "to", "by", "with"}
 )
@@ -1427,18 +1445,24 @@ def _deduplicate_acronym_glosses(body: str) -> str:
         return f"\x00G{len(placeholders) - 1}\x00"
 
     head = _FENCED_CODE_RE.sub(_stash, head)
+    head = _GLOSS_LINK_RE.sub(_stash, head)
 
     seen: set[str] = set()
     out: list[str] = []
     pos = 0
     for m in _ACRONYM_PAREN_RE.finditer(head):
         acr = m.group(1)
-        pre = head[:m.start()]
-        # Restrict the search to the current line / sentence.
-        boundary = max(
-            pre.rfind("\n"), pre.rfind(". "), pre.rfind("! "), pre.rfind("? ")
+        # Bounded lookback to the current line / sentence (an expansion is a
+        # few words), so a long paragraph with many parentheticals stays
+        # linear rather than re-slicing the whole prefix per match.
+        win_start = max(0, m.start() - _GLOSS_LOOKBACK)
+        chunk = head[win_start:m.start()]
+        rel = max(
+            chunk.rfind("\n"), chunk.rfind(". "),
+            chunk.rfind("! "), chunk.rfind("? "),
         )
-        window = head[boundary + 1:m.start()]
+        base = win_start + (rel + 1 if rel >= 0 else 0)
+        window = head[base:m.start()]
         words = list(_GLOSS_WORD_RE.finditer(window))
         gloss_start = None
         for k in range(1, min(len(words), 8) + 1):
@@ -1447,7 +1471,7 @@ def _deduplicate_acronym_glosses(body: str) -> str:
                 between = window[chosen[-1].end():]
                 if between.strip():  # words must sit right before "("
                     break
-                gloss_start = boundary + 1 + chosen[0].start()
+                gloss_start = base + chosen[0].start()
                 break
         if gloss_start is None:
             continue
