@@ -129,13 +129,15 @@ concept per round. It walks a fixed list of **waves** in priority order
 and assigns work:
 
 - **WRITE** — every concept that has reached the `ready` band gets
-  written into a page. Writing is final, so this comes first.
+  written into a page. Writing commits a ready concept before other
+  work, so this comes first.
 - **REFINE** — a committed page is re-drafted when its live evidence has
-  outgrown its write-time snapshot, a newly relevant data table now
-  covers it, or enough topical-neighbour pages (ones sharing a source
-  document) have committed since it was written that it should now
+  grown past a threshold beyond its write-time snapshot, a newly
+  committed data table shares a source document with it, or at least a
+  set number of topical-neighbour article/person pages (ones sharing a
+  source document) have committed since it was written, so it should now
   cross-reference them. Refining converges: each re-commit records the
-  current evidence, tables, and neighbours as the new baseline.
+  current evidence count, tables, and neighbours as the new baseline.
 - **GROW** — concepts in the `growing` band get more research: an
   explorer gathers more evidence for them.
 - **BRIDGE** — when the wiki splits into weakly connected clusters, a
@@ -144,18 +146,17 @@ and assigns work:
   from the most important documents not yet covered. This is **seeding**:
   reading top-ranked source papers to anchor fresh concepts.
 - **PERSON** — biography pages for the researchers the wiki leans on,
-  ranked first by how many of the committed pages' source documents each
-  authored (so a heavily-cited author earns a page even with a modest
-  h-index) and then by field-prominence metrics. A strict
-  quoted-contribution gate decides which actually commit (see "Person
-  pages" below).
+  ranked first by how many committed-page source documents each authored,
+  then by field-prominence metrics, so source-critical authors with a
+  modest h-index still get reviewed. A strict quoted-contribution gate
+  decides which actually commit (see "Person pages" below).
 - **GAP** — every round, a task scans the corpus passages still not
   covered by any dossier or page and either attaches them to a nearby
   page or proposes a new concept. It also records grounded **literature
   gaps** — open questions, contradictions between sources, and
-  understudied areas the passages explicitly state — which a final pass
-  synthesises into a committed "Literature Gaps and Open Questions" page.
-  This is the main driver of coverage.
+  understudied areas the passages explicitly state — which, when enough
+  accumulate, a final pass synthesises into a committed "Literature Gaps
+  and Open Questions" page. This is the main driver of coverage.
 - **DATA** — every round, a task harvests verifiable numbers and tables
   into the data layer (see "The two output layers").
 

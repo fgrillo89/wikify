@@ -82,9 +82,9 @@ and biographies, linked together and queryable) and a separate
 numbers across the corpus and re-derive from a stored spec. Along the
 way the agent also records grounded **literature gaps** — open questions,
 cross-source contradictions, and understudied areas stated in the
-evidence — and synthesises them into a dedicated page, so a build
-surfaces not just what the corpus settles but what it leaves open. See
-[docs/overview.md](docs/overview.md) for the full loop.
+evidence — and, when enough accumulate, synthesises them into a dedicated
+page, so a build surfaces not just what the corpus settles but what it
+leaves open. See [docs/overview.md](docs/overview.md) for the full loop.
 
 ## Beyond classic RAG
 
