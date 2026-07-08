@@ -428,7 +428,9 @@ def _build_navigation_view(
             "pages": pages,
             "children": children,
             "kind": dominant,
-            "page_count": len(pages),
+            # Include pages nested in child groups so the index card count
+            # reflects the whole subtree, not just directly-attached pages.
+            "page_count": len(pages) + sum(c["page_count"] for c in children),
         }
 
     groups = [
