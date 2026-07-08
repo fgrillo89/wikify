@@ -382,15 +382,7 @@ def assemble_pdf_metadata(
     # element through ``parse_authors`` whenever it contains a separator
     # so the byline gets split correctly. ``parse_authors`` is a no-op on
     # a single name without separators.
-    xmp_authors_raw = list(xmp.get("authors") or [])
-    xmp_authors_flat: list[str] = []
-    for raw in xmp_authors_raw:
-        if not raw:
-            continue
-        if re.search(r"[,;]| and ", raw):
-            xmp_authors_flat.extend(parse_authors(raw))
-        else:
-            xmp_authors_flat.append(raw)
+    xmp_authors_flat = _flatten_xmp_authors(list(xmp.get("authors") or []))
     xmp_authors = validate_authors_against_filename(
         xmp_authors_flat, fn_author
     )
@@ -523,6 +515,27 @@ def parse_authors(raw: str) -> list[str]:
         assembled.append(part)
         i += 1
     return [a for a in assembled if _is_valid_author(a)]
+
+
+def _flatten_xmp_authors(raw_list: list[str]) -> list[str]:
+    """Flatten XMP ``dc:creator`` entries into individual author names.
+
+    ``dc:creator`` is supposed to be one ``rdf:li`` per author, but some
+    publishers (notably IOP, Elsevier) stuff the whole byline into a single
+    ``rdf:li`` separated by commas/semicolons. Split those with
+    ``parse_authors`` (which validates each name); validate the single-name
+    entries too, so an editorial-band line captured as a lone creator
+    ("Received 5th July") cannot pass through unchecked.
+    """
+    out: list[str] = []
+    for raw in raw_list:
+        if not raw:
+            continue
+        if re.search(r"[,;]| and ", raw):
+            out.extend(parse_authors(raw))
+        elif _is_valid_author(raw):
+            out.append(raw)
+    return out
 
 
 # Canonical name-particle / name-suffix vocabularies. Kept here so the
@@ -1339,18 +1352,33 @@ _EDITORIAL_WORKFLOW_WORDS = frozenset({
     "published", "communicated", "corrected", "reviewed",
 })
 _ORDINAL_DATE_RE = re.compile(r"\b\d{1,2}(?:st|nd|rd|th)\b", re.IGNORECASE)
+_MONTH_WORDS = frozenset({
+    "january", "february", "march", "april", "may", "june", "july",
+    "august", "september", "october", "november", "december",
+    "jan", "feb", "mar", "apr", "jun", "jul", "aug", "sep", "sept",
+    "oct", "nov", "dec",
+})
 
 
 def _looks_like_editorial_line(name: str) -> bool:
     """True when a candidate author is a journal editorial-workflow date
     line ("Received 5th July", "Accepted 2nd October") rather than a byline.
+
+    Two signals, both structural to publisher front matter: the candidate
+    opens with a submission verb, or it pairs an ordinal date token with a
+    month name. The ordinal is gated on a month so a generational suffix
+    ("John Smith 3rd") is not mistaken for a date.
     """
     if not name:
         return False
-    first = name.split()[0].lower().strip(".,;:")
-    if first in _EDITORIAL_WORKFLOW_WORDS:
+    tokens = [t.lower().strip(".,;:") for t in name.split()]
+    if not tokens:
+        return False
+    if tokens[0] in _EDITORIAL_WORKFLOW_WORDS:
         return True
-    return bool(_ORDINAL_DATE_RE.search(name))
+    if _ORDINAL_DATE_RE.search(name) and any(t in _MONTH_WORDS for t in tokens):
+        return True
+    return False
 
 
 def _is_valid_author(name: str) -> bool:

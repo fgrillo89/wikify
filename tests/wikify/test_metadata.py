@@ -16,6 +16,7 @@ from pathlib import Path
 
 from wikify.ingest.bibtex import _clean_author_name, _clean_title
 from wikify.ingest.metadata import (
+    _flatten_xmp_authors,
     _looks_like_editorial_line,
     _looks_like_journal_name,
     _looks_like_reference_list,
@@ -308,6 +309,29 @@ class TestEditorialLineRejection:
         # A surname that merely contains an editorial word as a substring
         # (not the leading token) stays valid.
         assert not _looks_like_editorial_line("Anna Published-Author")
+
+    def test_classifier_keeps_generational_suffix(self):
+        # An ordinal token alone (generational suffix) is not a date line;
+        # the ordinal rule only fires when a month token is also present.
+        assert not _looks_like_editorial_line("John Smith 3rd")
+        assert not _looks_like_editorial_line("William Gates 3rd")
+
+    def test_flatten_xmp_authors_drops_editorial_entries(self):
+        # Separate rdf:li entries with no separator must still be validated.
+        assert _flatten_xmp_authors(
+            ["Received 5th July", "Accepted 2nd October"]
+        ) == []
+
+    def test_flatten_xmp_authors_keeps_single_names(self):
+        assert _flatten_xmp_authors(
+            ["Fabio Grillo", "J. Ruud van Ommen"]
+        ) == ["Fabio Grillo", "J. Ruud van Ommen"]
+
+    def test_flatten_xmp_authors_splits_combined_entry(self):
+        # A single rdf:li stuffed with the whole byline is split.
+        assert _flatten_xmp_authors(
+            ["Hao Van Bui, Fabio Grillo and J. Ruud van Ommen"]
+        ) == ["Hao Van Bui", "Fabio Grillo", "J. Ruud van Ommen"]
 
     def test_parse_author_line_drops_received_accepted(self):
         line = "Received 5th July 2016, Accepted 2nd October 2016"
