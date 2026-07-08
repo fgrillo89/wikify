@@ -865,6 +865,12 @@ def _render_article(
             used_figure_ids=used_figure_ids,
         )
 
+    # Repair over-escaped LaTeX (``\\gamma`` -> ``\gamma``) so KaTeX renders
+    # it instead of dropping the command name as text, and collapse repeated
+    # ``Expansion (ACR)`` acronym glosses to the bare acronym.
+    body_md = _normalize_math_escapes(body_md)
+    body_md = _deduplicate_acronym_glosses(body_md)
+
     # Isolate ``$$...$$`` display math so arithmatex's BlockProcessor
     # picks it up. Without blank lines around the block, arithmatex
     # falls back to inline matching and produces stray ``$`` outside
@@ -1357,6 +1363,105 @@ _DISPLAY_MATH_RE = re.compile(
 _FENCED_CODE_RE = re.compile(
     r"(?ms)^(?P<fence>`{3,}|~{3,})[^\n]*\n.*?^(?P=fence)\s*$",
 )
+
+# Math spans (display + inline) for escape normalization.
+_MATH_SPAN_RE = re.compile(
+    r"\$\$.*?\$\$|\$[^$\n]+?\$|\\\(.+?\\\)|\\\[.+?\\\]", re.DOTALL,
+)
+_OVERESCAPED_MATH_RE = re.compile(r"\\\\(?=[A-Za-z])")
+
+
+def _normalize_math_escapes(body: str) -> str:
+    """Collapse an over-escaped ``\\\\`` before a command letter to ``\\``.
+
+    Some writers double-escape LaTeX in the response JSON (``\\\\gamma``
+    instead of ``\\gamma``), so the committed body carries ``\\gamma``.
+    KaTeX then reads ``\\`` as a line break and dumps the command name as
+    plain text. A ``\\`` immediately before a letter is never a valid line
+    break (that is followed by whitespace, a brace, or ``[``), so collapsing
+    it is safe and only touches the over-escape symptom. Applied inside math
+    spans only, so prose backslashes are untouched.
+    """
+    return _MATH_SPAN_RE.sub(
+        lambda m: _OVERESCAPED_MATH_RE.sub(lambda _m: "\\", m.group(0)), body,
+    )
+
+
+_ACRONYM_PAREN_RE = re.compile(r"\(([A-Z][A-Za-z0-9]{1,6})\)")
+# A word token, optionally wrapped in markdown emphasis (**bold**/*italic*).
+_GLOSS_WORD_RE = re.compile(r"[*_]{0,2}[A-Za-z][A-Za-z*_-]*")
+_GLOSS_STOPWORDS = frozenset(
+    {"of", "the", "and", "for", "a", "an", "in", "on", "to", "by", "with"}
+)
+
+
+def _gloss_initials(words: list[str]) -> str:
+    return "".join(
+        w[0] for w in (t.strip("*_") for t in words)
+        if w and w.lower() not in _GLOSS_STOPWORDS
+    ).upper()
+
+
+def _deduplicate_acronym_glosses(body: str) -> str:
+    """Collapse a repeated ``Expansion (ACR)`` gloss to the bare acronym.
+
+    An acronym is introduced with its expansion once; writers sometimes
+    re-introduce it in a later sentence (``Atomic layer deposition (ALD)``
+    glossed twice on one page). For each ``(ACR)``, the immediately preceding
+    words on the same line are scanned for the SHORTEST suffix whose
+    significant initials equal ``ACR`` (markdown emphasis and stopwords
+    ignored). The first such gloss of an acronym is kept; later ones have
+    their ``Expansion (ACR)`` span replaced by the bare ``ACR``. A
+    parenthetical with no matching expansion is left alone. Operates on the
+    prose above the evidence/references block (leaving verbatim reference
+    titles intact) and skips fenced code.
+    """
+    ref = re.search(r"(?m)^## (?:Evidence|References)\b", body)
+    split = ref.start() if ref else len(body)
+    head, tail = body[:split], body[split:]
+
+    placeholders: list[str] = []
+
+    def _stash(m: re.Match[str]) -> str:
+        placeholders.append(m.group(0))
+        return f"\x00G{len(placeholders) - 1}\x00"
+
+    head = _FENCED_CODE_RE.sub(_stash, head)
+
+    seen: set[str] = set()
+    out: list[str] = []
+    pos = 0
+    for m in _ACRONYM_PAREN_RE.finditer(head):
+        acr = m.group(1)
+        pre = head[:m.start()]
+        # Restrict the search to the current line / sentence.
+        boundary = max(
+            pre.rfind("\n"), pre.rfind(". "), pre.rfind("! "), pre.rfind("? ")
+        )
+        window = head[boundary + 1:m.start()]
+        words = list(_GLOSS_WORD_RE.finditer(window))
+        gloss_start = None
+        for k in range(1, min(len(words), 8) + 1):
+            chosen = words[-k:]
+            if _gloss_initials([w.group(0) for w in chosen]) == acr:
+                between = window[chosen[-1].end():]
+                if between.strip():  # words must sit right before "("
+                    break
+                gloss_start = boundary + 1 + chosen[0].start()
+                break
+        if gloss_start is None:
+            continue
+        if acr in seen:
+            out.append(head[pos:gloss_start])
+            out.append(acr)
+            pos = m.end()
+        else:
+            seen.add(acr)
+    out.append(head[pos:])
+    restored = re.sub(
+        r"\x00G(\d+)\x00", lambda mm: placeholders[int(mm.group(1))], "".join(out)
+    )
+    return restored + tail
 
 
 def _isolate_display_math(body: str) -> str:
