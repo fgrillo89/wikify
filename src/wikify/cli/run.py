@@ -167,11 +167,18 @@ def cmd_show(
         )
 
 
-def _sizing_knobs(n_docs: int, n_chunks: int) -> dict:
+def _sizing_knobs(n_docs: int, n_chunks: int, n_notable_authors: int = 0) -> dict:
     """Corpus-scaled round knobs, the single source mirrored from
     ``references/sizing.md``. Surfaced in ``run sense`` so the SEED floor
     (``target_min``) and PERSON gate (``target_min/2``) are deterministic
     signals, not values the editor must re-derive from prose each round.
+
+    ``expected_people`` scales with the corpus's notable-author pool
+    (``n_notable_authors``, authors above a solid h-index) when that is
+    known, falling back to the ``log(D)`` fit -- a log curve tuned for
+    concept coverage badly under-counts people on authorship-rich research
+    corpora. The strict person maturity gate remains the quality filter, so
+    a generous target only widens who is reviewed, not who commits.
     """
     import math
 
@@ -182,13 +189,16 @@ def _sizing_knobs(n_docs: int, n_chunks: int) -> dict:
     kc = max(int(n_chunks), 1)
     log_d = math.log10(d)
     wave_size = clamp(math.ceil(d / 80), 2, 12)
+    people_log = 4 * log_d - 3
+    expected_people = clamp(round(max(people_log, 0.5 * n_notable_authors)), 0, 60)
     return {
         "n_docs": int(n_docs),
         "n_chunks": int(n_chunks),
+        "n_notable_authors": int(n_notable_authors),
         "wave_size": wave_size,
         "target_min": clamp(round(42 * log_d - 27), 10, 200),
         "expected_pages": clamp(round(38 * log_d - 37), 5, 250),
-        "expected_people": clamp(round(4 * log_d - 3), 0, 30),
+        "expected_people": expected_people,
         "max_rounds": clamp(round(kc / (wave_size * 25)) + 12, 12, 250),
         "person_quota_multiplier": 2.0,
     }
@@ -256,7 +266,23 @@ def cmd_sense(
     # re-deriving sizing from prose each round (see references/sizing.md).
     n_docs = len(cov.get("per_doc") or {})
     n_chunks = cov.get("n_total") or 0
-    sizing = _sizing_knobs(n_docs, n_chunks)
+    # Notable-author pool: authors above a solid h-index, so the person target
+    # scales with how authorship-rich the corpus is rather than a flat log(D).
+    n_notable_authors = 0
+    if corpus.sqlite_path.exists():
+        import sqlite3 as _sqlite3
+        _con = _sqlite3.connect(str(corpus.sqlite_path))
+        try:
+            row = _con.execute(
+                "SELECT COUNT(*) FROM node_metrics WHERE node_type='author' "
+                "AND metric='h_index' AND value >= 4"
+            ).fetchone()
+            n_notable_authors = int(row[0]) if row else 0
+        except _sqlite3.Error:
+            n_notable_authors = 0
+        finally:
+            _con.close()
+    sizing = _sizing_knobs(n_docs, n_chunks, n_notable_authors)
     active_concepts = sum(
         v for k, v in bands.items() if k not in ("dropped", "parked")
     )

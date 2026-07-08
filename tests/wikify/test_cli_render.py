@@ -572,3 +572,51 @@ def test_index_stats_resolve_short_doc_hex_handles(tmp_path: Path) -> None:
     assert stats["total_docs"] == 1
     assert 2021 in stats["years"], f"Year 2021 not resolved; stats={stats}"
     assert stats["words"] is not None and stats["words"] > 0
+
+
+def test_deduplicate_acronym_glosses_collapses_repeats() -> None:
+    """A second ``Expansion (ACR)`` gloss collapses to the bare acronym; the
+    first gloss, verbatim reference titles, non-gloss parentheticals, and
+    ``[[wikilink]]`` targets are left intact."""
+    from wikify.render.html.render import _deduplicate_acronym_glosses
+
+    body = (
+        "Atomic layer deposition (ALD) is a technique.[^e1] The method is "
+        "self-limiting.[^e2] Atomic layer deposition (ALD) has emerged as "
+        "important.[^e3]\n\n## References\n"
+        "[^e1]: Atomic layer deposition (ALD) of platinum -- verbatim title\n"
+    )
+    out = _deduplicate_acronym_glosses(body)
+    assert "Atomic layer deposition (ALD) is a technique" in out  # first kept
+    assert "ALD has emerged as important" in out                   # 2nd collapsed
+    assert "Atomic layer deposition (ALD) has emerged" not in out
+    assert "Atomic layer deposition (ALD) of platinum" in out       # ref intact
+    # Leading article preserved; only the core term collapses.
+    other = "the reaction chamber (RC) was heated; the reaction chamber (RC) cooled"
+    assert _deduplicate_acronym_glosses(other) == \
+        "the reaction chamber (RC) was heated; the RC cooled"
+    # A gloss inside a wikilink target is not rewritten (would break the link).
+    wl = ("Atomic layer deposition (ALD) is x. See "
+          "[[Atomic layer deposition (ALD)]] then atomic layer deposition (ALD).")
+    out_wl = _deduplicate_acronym_glosses(wl)
+    assert "[[Atomic layer deposition (ALD)]]" in out_wl  # link target intact
+    assert out_wl.endswith("then ALD.")                   # plain repeat collapsed
+
+
+def test_normalize_math_escapes_fixes_overescaped_commands() -> None:
+    r"""Over-escaped ``\\cmd`` inside math collapses to ``\cmd`` while a real
+    ``\\`` line break, fenced code, and prose/prices are preserved."""
+    from wikify.render.html.render import _normalize_math_escapes
+
+    assert _normalize_math_escapes(r"$$\\gamma_{s} \\quad \\text{x}$$") == \
+        r"$$\gamma_{s} \quad \text{x}$$"
+    assert _normalize_math_escapes(r"$\\alpha$") == r"$\alpha$"
+    assert _normalize_math_escapes(r"$$a \\ b$$") == r"$$a \\ b$$"  # line break kept
+    # Prose dollar amounts are not a math span; a stray path backslash is kept.
+    assert _normalize_math_escapes(r"costs $5 to $10; C:\\dir kept") == \
+        r"costs $5 to $10; C:\\dir kept"
+    # Fenced code is excised: example math inside a fence is untouched.
+    fenced = "```\n" + r"$$\\gamma$$" + "\n```\n" + r"$$\\gamma$$"
+    out = _normalize_math_escapes(fenced)
+    assert "```\n" + r"$$\\gamma$$" + "\n```" in out  # code fence intact
+    assert out.endswith(r"$$\gamma$$")                # math outside collapsed

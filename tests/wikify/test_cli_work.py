@@ -1745,6 +1745,146 @@ def test_work_refine_candidates_flags_new_data(tmp_path: Path) -> None:
     assert _refine()["n_candidates"] == 0
 
 
+def _project_committed_to_wiki_db(
+    bundle, slug: str, doc_ids: list[str], kind: str = "article"
+) -> None:
+    """Insert a committed page's ``wiki_evidence`` rows (the indexed doc-id
+    projection the cross-link signal reads) into the bundle's wiki.db."""
+    import sqlite3
+    con = sqlite3.connect(str(bundle.sqlite_path))
+    try:
+        con.execute(
+            "CREATE TABLE IF NOT EXISTS wiki_pages (page_id TEXT PRIMARY KEY, "
+            "slug TEXT, title TEXT, kind TEXT, body TEXT, frontmatter_json TEXT, "
+            "created_at TEXT, updated_at TEXT)")
+        con.execute(
+            "CREATE TABLE IF NOT EXISTS wiki_evidence (page_id TEXT, marker TEXT, "
+            "chunk_id TEXT, doc_id TEXT, quote TEXT)")
+        con.execute(
+            "INSERT OR REPLACE INTO wiki_pages (page_id, slug, kind) VALUES (?,?,?)",
+            (slug, slug, kind))
+        for i, d in enumerate(doc_ids):
+            con.execute(
+                "INSERT INTO wiki_evidence (page_id, marker, chunk_id, doc_id, quote)"
+                " VALUES (?,?,?,?,?)", (slug, f"e{i}", f"{slug}_c{i}", d, "q"))
+        con.commit()
+    finally:
+        con.close()
+
+
+def test_work_refine_candidates_flags_new_siblings(tmp_path: Path) -> None:
+    """A committed page flags ``new_siblings`` when at least
+    ``--min-new-siblings`` topical-neighbour pages (sharing a source doc)
+    committed after it and are absent from its ``siblings_seen`` snapshot; a
+    page committed once those neighbours already existed does not, and
+    ``--min-new-siblings 0`` disables the signal (so it converges)."""
+    from wikify.api import Bundle
+    from wikify.bundle.run.events import Event, append_event
+    from wikify.bundle.run.state import load_state
+    from wikify.bundle.work.card import create_concept, load_card, save_card
+    from wikify.bundle.work.evidence import EvidenceRecord, append_evidence
+
+    bundle_dir = _init_bundle(tmp_path)
+    bundle = Bundle.open(bundle_dir)
+    run_id = load_state(bundle).run_id
+
+    def _commit(slug: str, siblings_seen: list[str]) -> None:
+        create_concept(bundle, page_id=slug.upper(), slug=slug, kind="article")
+        # Every page shares source doc "shared_d" -> all are topical neighbours.
+        append_evidence(bundle, slug, [
+            EvidenceRecord(chunk_id=f"{slug}_c", doc_id="shared_d", status="active"),
+        ])
+        card = load_card(bundle, slug)
+        card.front["status"] = "committed"
+        save_card(bundle, slug, card)
+        append_event(bundle, Event(
+            run_id=run_id, type="page_committed", actor="test",
+            page_id=slug.upper(),
+            data={"slug": slug, "kind": "article", "evidence_count": 1,
+                  "evidence_total": 1, "data_artifacts_seen": [],
+                  "siblings_seen": siblings_seen}))
+        _project_committed_to_wiki_db(bundle, slug, ["shared_d"])
+
+    _commit("a", [])                       # committed first: saw no neighbours
+    _commit("b", ["a"])
+    _commit("c", ["a", "b"])
+    _commit("d", ["a", "b", "c"])
+    _commit("e", ["a", "b", "c", "d"])     # saw all four -> 0 new
+
+    res = runner.invoke(app, [
+        "work", "refine-candidates", "--run", str(bundle_dir),
+        "--format", "json", "--min-new-siblings", "4",
+    ])
+    assert res.exit_code == 0, res.output
+    by_slug = {it["slug"]: it for it in json.loads(res.output)["items"]}
+    assert "new_siblings" in by_slug["a"]["reason"]
+    assert by_slug["a"]["n_new_siblings"] == 4
+    assert "e" not in by_slug or "new_siblings" not in by_slug["e"]["reason"]
+
+    res0 = runner.invoke(app, [
+        "work", "refine-candidates", "--run", str(bundle_dir),
+        "--format", "json", "--min-new-siblings", "0",
+    ])
+    by0 = {it["slug"]: it for it in json.loads(res0.output)["items"]}
+    assert "a" not in by0  # signal disabled and no other signal fires
+
+    # A legacy page (no siblings_seen key recorded at all) is treated as
+    # converged by default -> not flagged, so an old wiki doesn't flood.
+    create_concept(bundle, page_id="X", slug="x", kind="article")
+    append_evidence(bundle, "x", [
+        EvidenceRecord(chunk_id="x_c", doc_id="shared_d", status="active")])
+    xcard = load_card(bundle, "x")
+    xcard.front["status"] = "committed"
+    save_card(bundle, "x", xcard)
+    append_event(bundle, Event(
+        run_id=run_id, type="page_committed", actor="test", page_id="X",
+        data={"slug": "x", "kind": "article", "evidence_count": 1,
+              "evidence_total": 1, "data_artifacts_seen": []}))  # no siblings_seen
+    _project_committed_to_wiki_db(bundle, "x", ["shared_d"])
+
+    def _refine_siblings(*extra: str) -> dict:
+        r = runner.invoke(app, [
+            "work", "refine-candidates", "--run", str(bundle_dir),
+            "--format", "json", "--min-new-siblings", "4", *extra])
+        assert r.exit_code == 0, r.output
+        return {it["slug"]: it for it in json.loads(r.output)["items"]}
+
+    assert "new_siblings" not in _refine_siblings().get("x", {}).get("reason", "")
+    # Opt-in legacy drain surfaces it (all its neighbours become "new").
+    assert "new_siblings" in _refine_siblings("--include-legacy-siblings")["x"]["reason"]
+
+
+def test_doc_sharing_committed_pages_helper(tmp_path: Path) -> None:
+    """The commit-time sibling helper returns committed pages sharing a source
+    doc, excluding the page itself and any non-committed card."""
+    from wikify.api import Bundle
+    from wikify.bundle.wiki.commit import doc_sharing_committed_pages
+    from wikify.bundle.work.card import create_concept, load_card, save_card
+    from wikify.bundle.work.evidence import EvidenceRecord, append_evidence
+
+    bundle = Bundle.open(_init_bundle(tmp_path))
+
+    def _mk(slug: str, doc: str, committed: bool = True) -> None:
+        create_concept(bundle, page_id=slug.upper(), slug=slug, kind="article")
+        append_evidence(bundle, slug, [
+            EvidenceRecord(chunk_id=f"{slug}_c", doc_id=doc, status="active")])
+        if committed:
+            card = load_card(bundle, slug)
+            card.front["status"] = "committed"
+            save_card(bundle, slug, card)
+            _project_committed_to_wiki_db(bundle, slug, [doc])
+
+    _mk("a", "d1")               # self (shares d1) -> excluded
+    _mk("b", "d1")               # committed, shares d1 -> included
+    _mk("c", "d2")               # committed, different doc -> excluded
+    _mk("d", "d1", committed=False)  # shares d1 but not committed -> excluded
+    # A kind='data' artifact page sharing d1 is NOT a topical sibling.
+    _project_committed_to_wiki_db(bundle, "dtable", ["d1"], kind="data")
+
+    assert doc_sharing_committed_pages(bundle, "a", ["d1"]) == ["b"]
+    assert doc_sharing_committed_pages(bundle, "a", []) == []
+
+
 # -------------------------------------------------------- concept-recall
 
 
@@ -1957,22 +2097,27 @@ def test_concept_recall_default_bm25_loads_no_embedder(
     assert len(recall["candidate_docs"]) == 5
 
 
-def test_concept_recall_rank_semantic_opt_in(tmp_path: Path, monkeypatch) -> None:
-    """``--rank semantic`` routes the relevance search through the semantic
-    mode; the default routes through bm25."""
+def test_concept_recall_default_semantic_with_bm25_fallback(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """The default routes through ``semantic`` (matching the build-evidence
+    gather), ``--rank bm25`` stays lexical, and a semantic pass that yields
+    nothing (no corpus vectors) falls back to bm25 -- reported as
+    ``rank_used``."""
     import wikify.corpus.queries as queries_mod
 
     bundle, corpus_root, _docs = _recall_bundle(tmp_path)
     seen_modes: list[str] = []
 
-    def _capture(corpus, query, *, top_k, rank, exclude_kinds):
+    def _capture_hit(corpus, query, *, top_k, rank, exclude_kinds):
         seen_modes.append(rank)
         return [{"doc_id": "doc_2015", "score": 0.9}]
 
-    # The command imports search_chunks locally from the queries module.
-    monkeypatch.setattr(queries_mod, "search_chunks", _capture)
+    monkeypatch.setattr(queries_mod, "search_chunks", _capture_hit)
 
-    for args, expected in ((["--rank", "semantic"], "semantic"), ([], "bm25")):
+    # Default -> semantic (and rank_used reflects it).
+    for args, expected in ((["--rank", "semantic"], "semantic"),
+                           ([], "semantic"), (["--rank", "bm25"], "bm25")):
         seen_modes.clear()
         result = runner.invoke(
             app,
@@ -1984,6 +2129,95 @@ def test_concept_recall_rank_semantic_opt_in(tmp_path: Path, monkeypatch) -> Non
         )
         assert result.exit_code == 0, result.output
         assert seen_modes and all(m == expected for m in seen_modes), seen_modes
+        assert json.loads(result.output)["recall"]["rank_used"] == expected
+
+    # Semantic pass returns nothing (no vectors) -> transparent bm25 fallback.
+    def _capture_empty_semantic(corpus, query, *, top_k, rank, exclude_kinds):
+        seen_modes.append(rank)
+        return [] if rank == "semantic" else [{"doc_id": "doc_2015", "score": 0.9}]
+
+    monkeypatch.setattr(queries_mod, "search_chunks", _capture_empty_semantic)
+    seen_modes.clear()
+    result = runner.invoke(
+        app,
+        [
+            "work", "concept-recall", "photonics",
+            "--run", str(bundle), "--corpus", str(corpus_root), "--format", "json",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert "semantic" in seen_modes and "bm25" in seen_modes
+    assert json.loads(result.output)["recall"]["rank_used"] == "bm25"
+
+
+def test_add_gap_note_grounds_quote_and_rejects_fabrication(tmp_path: Path) -> None:
+    """``add-gap-note`` appends a schema-formatted line only when the quote is a
+    literal substring of the named chunk; a fabricated quote, a bad type, and a
+    contradiction without its second chunk are all rejected."""
+    bundle, corpus_root, docs = _recall_bundle(tmp_path)
+    cid, _ = docs["doc_2015"]
+    base = [
+        "work", "add-gap-note", "--run", str(bundle),
+        "--corpus", str(corpus_root), "--format", "json",
+    ]
+
+    ok = runner.invoke(app, [
+        *base, "--chunk-id", cid, "--type", "understudied",
+        "--gap", "on-chip loss is understudied",
+        "--quote", "on-chip light manipulation",
+    ])
+    assert ok.exit_code == 0, ok.output
+    assert json.loads(ok.stdout)["type"] == "understudied"
+    notes = Path(bundle) / "work" / "notes" / "literature_gaps.md"
+    body = notes.read_text(encoding="utf-8")
+    assert body.startswith("- chunk_id:") and "type: understudied" in body
+    assert 'quote: "on-chip light manipulation"' in body
+
+    fabricated = runner.invoke(app, [
+        *base, "--chunk-id", cid, "--type", "unclear",
+        "--gap", "fake", "--quote", "quantum teleportation xyzzy",
+    ])
+    assert fabricated.exit_code != 0
+    assert json.loads(fabricated.stderr)["error"] == "quote_not_in_chunk"
+
+    bad_type = runner.invoke(app, [
+        *base, "--chunk-id", cid, "--type", "bogus",
+        "--gap", "x", "--quote", "on-chip light manipulation",
+    ])
+    assert bad_type.exit_code != 0
+    assert json.loads(bad_type.stderr)["error"] == "bad_gap_type"
+
+    lone_contradiction = runner.invoke(app, [
+        *base, "--chunk-id", cid, "--type", "contradiction",
+        "--gap", "x", "--quote", "on-chip light manipulation",
+    ])
+    assert lone_contradiction.exit_code != 0
+    assert json.loads(lone_contradiction.stderr)["error"] == (
+        "contradiction_requires_second_chunk"
+    )
+
+    # A well-formed contradiction: both quotes verified against their chunks.
+    cid2, _ = docs["doc_2010"]
+    good_contra = runner.invoke(app, [
+        *base, "--chunk-id", cid, "--type", "contradiction",
+        "--gap", "sources disagree on X", "--quote", "on-chip light manipulation",
+        "--contradicts-chunk-id", cid2,
+        "--contradicts-quote", "high-bandwidth data transmission",
+    ])
+    assert good_contra.exit_code == 0, good_contra.output
+    body = notes.read_text(encoding="utf-8")
+    assert "type: contradiction" in body
+    assert 'contradicts_quote: "high-bandwidth data transmission"' in body
+
+    # The contradicting quote must also be literal.
+    bad_contra = runner.invoke(app, [
+        *base, "--chunk-id", cid, "--type", "contradiction",
+        "--gap", "x", "--quote", "on-chip light manipulation",
+        "--contradicts-chunk-id", cid2,
+        "--contradicts-quote", "warp drive containment field",
+    ])
+    assert bad_contra.exit_code != 0
+    assert json.loads(bad_contra.stderr)["error"] == "contradicts_quote_not_in_chunk"
 
 
 def _add_reference_edges(corpus_root: Path, citing: str, cited: list[str]) -> None:
