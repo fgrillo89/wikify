@@ -16,6 +16,8 @@ from pathlib import Path
 
 from wikify.ingest.bibtex import _clean_author_name, _clean_title
 from wikify.ingest.metadata import (
+    _flatten_xmp_authors,
+    _looks_like_editorial_line,
     _looks_like_journal_name,
     _looks_like_reference_list,
     _parse_author_line,
@@ -280,6 +282,79 @@ class TestParseAuthorLineArtifacts:
             # No name should end with a single-letter affiliation marker.
             last_token = name.split()[-1]
             assert len(last_token) > 1 or last_token.endswith("."), name
+
+
+# ---------------------------------------------------------------------------
+# Editorial-workflow date lines must not be parsed as authors
+# ---------------------------------------------------------------------------
+
+
+class TestEditorialLineRejection:
+    """RSC / Wiley / Nature print submission dates ("Received 5th July
+    2016, Accepted 2nd October 2016") in the byline layout band. Without
+    a filename author hint the scanner used to return them as the author
+    list.
+    """
+
+    def test_classifier_flags_editorial_lines(self):
+        assert _looks_like_editorial_line("Received 5th July")
+        assert _looks_like_editorial_line("Accepted 2nd October")
+        assert _looks_like_editorial_line("Revised 21st December 2019")
+        assert _looks_like_editorial_line("Published 3rd March")
+
+    def test_classifier_keeps_real_names(self):
+        assert not _looks_like_editorial_line("Fabio Grillo")
+        assert not _looks_like_editorial_line("J. Ruud van Ommen")
+        assert not _looks_like_editorial_line("Hao Van Bui")
+        # A surname that merely contains an editorial word as a substring
+        # (not the leading token) stays valid.
+        assert not _looks_like_editorial_line("Anna Published-Author")
+
+    def test_classifier_keeps_generational_suffix(self):
+        # An ordinal token alone (generational suffix) is not a date line;
+        # the ordinal rule only fires when a month token is also present.
+        assert not _looks_like_editorial_line("John Smith 3rd")
+        assert not _looks_like_editorial_line("William Gates 3rd")
+
+    def test_flatten_xmp_authors_drops_editorial_entries(self):
+        # Separate rdf:li entries with no separator must still be validated.
+        assert _flatten_xmp_authors(
+            ["Received 5th July", "Accepted 2nd October"]
+        ) == []
+
+    def test_flatten_xmp_authors_keeps_single_names(self):
+        assert _flatten_xmp_authors(
+            ["Fabio Grillo", "J. Ruud van Ommen"]
+        ) == ["Fabio Grillo", "J. Ruud van Ommen"]
+
+    def test_flatten_xmp_authors_splits_combined_entry(self):
+        # A single rdf:li stuffed with the whole byline is split.
+        assert _flatten_xmp_authors(
+            ["Hao Van Bui, Fabio Grillo and J. Ruud van Ommen"]
+        ) == ["Hao Van Bui", "Fabio Grillo", "J. Ruud van Ommen"]
+
+    def test_parse_author_line_drops_received_accepted(self):
+        line = "Received 5th July 2016, Accepted 2nd October 2016"
+        assert _parse_author_line(line) == []
+
+    def test_byline_survives_when_dates_absent(self):
+        line = "Hao Van Bui, Fabio Grillo and J. Ruud van Ommen"
+        out = _parse_author_line(line)
+        assert "Fabio Grillo" in out
+        assert len(out) == 3
+
+    def test_extract_authors_skips_editorial_band(self):
+        # No fn_author hint -> heading heuristic (Strategy 2). The date
+        # line sits between the title and the real byline.
+        md = (
+            "# Atomic and molecular layer deposition: off the beaten track\n\n"
+            "Received 5th July 2016, Accepted 2nd October 2016\n\n"
+            "Hao Van Bui, Fabio Grillo and J. Ruud van Ommen\n\n"
+            "## Abstract\n\nText.\n"
+        )
+        names = extract_authors_from_markdown(md)
+        assert "Fabio Grillo" in names
+        assert not any(_looks_like_editorial_line(n) for n in names)
 
 
 # ---------------------------------------------------------------------------
