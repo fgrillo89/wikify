@@ -904,6 +904,8 @@ def _render_article(
     body_html = md.convert(body_md)
     body_html = _remap_figure_citation_numbers(body_html, page_id=pv.id)
 
+    # Give each <h2> an id so the in-page table-of-contents anchors resolve.
+    body_html = _add_heading_ids(body_html)
     toc = _build_toc(body_html)
     categories = [pv.kind]
 
@@ -1904,6 +1906,30 @@ def _remap_figure_citation_numbers(html: str, *, page_id: str = "") -> str:
         )
 
     return result
+
+
+_H2_OPEN_RE = re.compile(r"<h2([^>]*)>(.+?)</h2>", re.IGNORECASE | re.DOTALL)
+
+
+def _add_heading_ids(html: str) -> str:
+    """Inject an ``id`` into every ``<h2>`` that lacks one, using the same
+    ``_normalize`` slug the table of contents anchors to.
+
+    python-markdown does not emit heading ids in this pipeline, so the
+    ``_build_toc`` anchors (``href="#<slug>"``) had no target and every
+    in-page TOC link was dead. Slugging the heading here with the identical
+    ``_normalize`` call guarantees anchor == id.
+    """
+    def repl(m: "re.Match[str]") -> str:
+        attrs, inner = m.group(1), m.group(2)
+        if "id=" in attrs.lower():
+            return m.group(0)
+        slug = _normalize(_TAG_RE.sub("", inner).strip())
+        if not slug:
+            return m.group(0)
+        return f'<h2{attrs} id="{slug}">{inner}</h2>'
+
+    return _H2_OPEN_RE.sub(repl, html)
 
 
 def _build_toc(html: str) -> list[dict[str, str]]:

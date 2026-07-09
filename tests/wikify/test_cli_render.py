@@ -647,3 +647,26 @@ def test_clean_evidence_lines_swallows_multiline_quote() -> None:
     assert "[^e1]:" in out
     assert "Prose citing a source." in out
     assert "## References" in out
+
+
+def test_add_heading_ids_matches_toc_anchors() -> None:
+    """Every <h2> must get an id equal to the TOC anchor slug so in-page
+    table-of-contents links resolve.
+    """
+    from wikify.render.html.render import _add_heading_ids, _build_toc, _normalize
+
+    html = (
+        "<h2>Mechanism and surface chemistry</h2><p>x</p>"
+        "<h2>References</h2>"
+    )
+    out = _add_heading_ids(html)
+    assert 'id="mechanism-and-surface-chemistry"' in out
+    assert 'id="references"' in out
+    # TOC anchors must match the injected ids.
+    ids = {t["id"] for t in _build_toc(out)}
+    assert _normalize("Mechanism and surface chemistry") in ids
+    assert "references" in ids
+
+    # An existing id is preserved, not doubled.
+    html2 = '<h2 id="custom">Title</h2>'
+    assert _add_heading_ids(html2).count("id=") == 1
