@@ -489,20 +489,34 @@ When invoked on a bundle that already has `round_completed` events:
    doc that never enters a dossier never triggers a rewrite). Steps:
    - Emit `corpus_drift_detected` with old + new fingerprints.
    - Compute `new_doc_ids = corpus_doc_ids - union(notebook.covered_docs)`.
-   - **Route each new doc to the dossiers it belongs in (ENRICH).** For
-     each new doc, find its most-relevant existing slugs — cheaply via
-     `wikify corpus find --in-doc <doc> --rank all` against each candidate
-     slug's title/aliases, or a one-shot haiku classifier over the dossier
-     index for ambiguous docs — and for every match GROW that dossier with
-     the doc's chunks: `wikify work build-evidence <slug> --seed-docs
-     '[<doc_id>]' --corpus <corpus> --run <bundle>`, then emit the growth
-     event `wikify work add evidence <slug> --round <N> --run <bundle>`
-     (build-evidence does not self-emit it). A committed slug that gains
-     evidence this way becomes a `refine-candidate` (reason `ratio`/`delta`)
+   - **Route each new doc to the dossiers it belongs in (ENRICH), by
+     INSIGHT not by title.** A substantive paper (mechanism study, thesis,
+     parameter sweep) carries findings that belong to SEVERAL pages, and
+     those findings sit deep in the body — a title-only or document-order
+     gather pulls the abstract and front-matter and misses them. For each
+     new doc, and for each candidate slug it might feed, retrieve the doc's
+     chunks that actually carry the relevant insight:
+     `wikify corpus find --in-doc <doc> --query "<slug facets>" --rank all`,
+     where `<slug facets>` is the concept's title PLUS its specific
+     sub-topics/aliases (e.g. for a nucleation page: "nucleation delay,
+     island growth, coalescence, particle size versus cycles"; for a
+     process page: "growth per cycle, temperature window, precursor dose
+     saturation"). This returns relevance-ranked deep chunks; the gather's
+     claim-density ordering and front-matter rejection then keep substance
+     over blurb. GROW each matching slug with those chunk ids:
+     `wikify work build-evidence <slug> --from-ids <ids> --corpus <corpus>
+     --run <bundle>`, then emit the growth event `wikify work add evidence
+     <slug> --round <N> --run <bundle>` (build-evidence does not self-emit
+     it). A committed slug that gains evidence becomes a `refine-candidate`
      and the REFINE wave rewrites its page to cover and cite the new work;
-     an uncommitted slug advances toward its gate. One new doc may enrich
-     several slugs. This is what makes added literature actually change the
-     wiki rather than sit inert in the corpus.
+     an uncommitted slug advances toward its gate. One rich doc routes its
+     distinct findings to MANY slugs — do not stop at the first match.
+     For a high-value source (large, high-citation, thesis / review), spend
+     a dedicated **deep-read explorer Task** (P2/P3 over that single doc's
+     chunk set) that emits `evidence_suggestion`s across every concept it
+     touches and `concept_suggestion`s for insight-clusters no page covers,
+     rather than a one-shot facet gather. This is what makes added
+     literature actually change the wiki rather than sit inert in the corpus.
    - **Seed the genuinely-new concepts.** Docs that matched no existing
      slug (they introduce a topic the wiki lacks) go to the next SEED wave
      (P1 over those docs). New notable authors among the new docs open the
