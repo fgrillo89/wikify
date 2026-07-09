@@ -904,6 +904,8 @@ def _render_article(
     body_html = md.convert(body_md)
     body_html = _remap_figure_citation_numbers(body_html, page_id=pv.id)
 
+    # Give each <h2> an id so the in-page table-of-contents anchors resolve.
+    body_html = _add_heading_ids(body_html)
     toc = _build_toc(body_html)
     categories = [pv.kind]
 
@@ -1260,21 +1262,30 @@ def _clean_evidence_lines(
     # is the stable identity used for dedup, not the rendered text.
     parsed: dict[str, tuple[str, str]] = {}
     body_lines: list[str] = []
-    in_def_block = False
+    # A footnote definition ``[^eN]: ... > "<quote>"`` carries the chunk's
+    # first 400 chars verbatim. A table / OCR-broken chunk has hard newlines,
+    # so the closing quote never arrives on the definition line and the quote
+    # spills onto following lines; those leaked as a garbled paragraph under
+    # ``## References``. The quote is dropped anyway, so swallow ONLY the lines
+    # that continue an unterminated quote -- tracked by an odd ``"`` count --
+    # rather than every line until the next heading, which would also eat
+    # legitimate prose that happens to follow a footnote block.
+    in_open_quote = False
     for line in body.split("\n"):
-        if line.startswith("[^") and "]:" in line:
-            in_def_block = True
+        if not in_open_quote and line.startswith("[^") and "]:" in line:
             marker = line[2:line.index("]:")]
             cleaned = _CHUNK_HASH_RE.sub("", line)
             parsed[marker] = _format_evidence_body(
                 cleaned, doc_meta_map=doc_meta_map, doc_index=doc_index,
             )
+            # Odd number of quote chars => the quote opened and did not close
+            # on this line; keep swallowing until a line balances it.
+            in_open_quote = line.count('"') % 2 == 1
             continue
-        if in_def_block and not line.strip():
-            # Blank line between footnote definitions stays in the prose
-            # buffer; we re-emit footnotes in a single block at the end.
+        if in_open_quote:
+            if line.count('"') % 2 == 1:
+                in_open_quote = False
             continue
-        in_def_block = False
         body_lines.append(line)
 
     if not parsed:
@@ -1892,6 +1903,44 @@ def _remap_figure_citation_numbers(html: str, *, page_id: str = "") -> str:
         )
 
     return result
+
+
+_H2_OPEN_RE = re.compile(r"<h2([^>]*)>(.+?)</h2>", re.IGNORECASE | re.DOTALL)
+
+
+def _add_heading_ids(html: str) -> str:
+    """Inject an ``id`` into every ``<h2>`` that lacks one, using the same
+    ``_normalize`` slug the table of contents anchors to.
+
+    python-markdown does not emit heading ids in this pipeline, so the
+    ``_build_toc`` anchors (``href="#<slug>"``) had no target and every
+    in-page TOC link was dead. Slugging the heading here with the identical
+    ``_normalize`` call guarantees anchor == id.
+    """
+    seen: dict[str, int] = {}
+
+    def repl(m: "re.Match[str]") -> str:
+        attrs, inner = m.group(1), m.group(2)
+        # Match ``id`` only in ATTRIBUTE position (start or after whitespace)
+        # so an attribute value containing "id=" (e.g. data-x="id=foo") does
+        # not suppress injection; only a real ``id`` attribute is honoured.
+        if re.search(r'(?:^|\s)id\s*=', attrs, re.IGNORECASE):
+            return m.group(0)
+        slug = _normalize(_TAG_RE.sub("", inner).strip())
+        if not slug:
+            return m.group(0)
+        # Disambiguate two headings that normalise to the same slug so ids
+        # stay unique and each TOC anchor lands on its own heading.
+        n = seen.get(slug, 0)
+        seen[slug] = n + 1
+        if n:
+            slug = f"{slug}-{n + 1}"
+        # Emit the id FIRST so _build_toc's _HEADING_RE (which only captures an
+        # id immediately after ``<h2``) reuses this exact (deduped) value
+        # rather than recomputing a colliding one from the text.
+        return f'<h2 id="{slug}"{attrs}>{inner}</h2>'
+
+    return _H2_OPEN_RE.sub(repl, html)
 
 
 def _build_toc(html: str) -> list[dict[str, str]]:
