@@ -496,7 +496,9 @@ When invoked on a bundle that already has `round_completed` events:
      gather pulls the abstract and front-matter and misses them. For each
      new doc, and for each candidate slug it might feed, retrieve the doc's
      chunks that actually carry the relevant insight:
-     `wikify corpus find --in-doc <doc> --query "<slug facets>" --rank all`,
+     `wikify corpus find "<slug facets>" --in-doc <doc> --format quiet`
+     (the query is a POSITIONAL argument, not a `--query` flag; `--format
+     quiet` prints one chunk handle per line to feed `--from-ids`),
      where `<slug facets>` is the concept's title PLUS its specific
      sub-topics/aliases (e.g. for a nucleation page: "nucleation delay,
      island growth, coalescence, particle size versus cycles"; for a
@@ -521,11 +523,15 @@ When invoked on a bundle that already has `round_completed` events:
      slug (they introduce a topic the wiki lacks) go to the next SEED wave
      (P1 over those docs). New notable authors among the new docs open the
      PERSON wave (their contribution evidence now exists).
-   - After the new docs are absorbed (enriched + seeded), re-stamp the
-     stored fingerprint so drift does not re-fire next round:
+   - Re-stamp the stored fingerprint ONLY once EVERY new doc has been
+     accounted for — each one either grew at least one dossier (ENRICH),
+     was queued for SEED, or was explicitly judged irrelevant and recorded
+     as skipped. Do not re-stamp while any new doc is still unhandled: a
+     doc dropped before re-stamp is lost, because the next re-entry no
+     longer sees drift. Then:
      `wikify run set --corpus-fingerprint <new> --run <bundle>` (the
-     `<new>` value is `context_show().health.fingerprint`). Re-stamp only
-     AFTER the ENRICH GROWs, so a crash mid-pass re-fires drift and retries
+     `<new>` value is `context_show().health.fingerprint`). Re-stamping
+     after the GROWs also means a crash mid-pass re-fires drift and retries
      rather than silently skipping unabsorbed docs.
    Then enter the normal precedence (WRITE/REFINE/GROW/…): the REFINE wave
    drains the pages the ENRICH pass grew, and WRITE commits any new concept

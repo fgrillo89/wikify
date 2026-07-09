@@ -676,10 +676,15 @@ _CLAIM_NUMERIC_RE = re.compile(
     r"\d+(?:\.\d+)?\s?(?:%|nm|µm|um|Å|cycles?|sccm|Torr|mbar|Pa|"
     r"eV|°C|wt\.?%|at\.?%|mol|min|hours?|s\b)",
 )
+# All alternatives are LINE-ANCHORED (``^`` under MULTILINE): publisher
+# front matter is line-structured, so anchoring avoids rejecting body prose
+# that merely contains one of these tokens mid-sentence (e.g. "...the paper
+# was accepted:" or a sentence naming a DOI).
 _PUBLISHER_FRONTMATTER_RE = re.compile(
-    r"(?im)(?:^\s*cite\s+(?:as|this)\b|special\s+(?:topic\s+)?collection|"
-    r"^\s*citation:|\bsubmitted:\s|\baccepted:\s|\breceived:\s|"
-    r"\bdoi:\s*10\.|\bhttps?://doi\.org)",
+    r"(?im)^\s*(?:cite\s+(?:as|this)\b|citation:|"
+    r"special\s+(?:topic\s+)?collection|"
+    r"submitted:|accepted:|received:|"
+    r"doi:\s*10\.|https?://doi\.org)",
 )
 
 

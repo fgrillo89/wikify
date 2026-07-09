@@ -2409,6 +2409,20 @@ class TestPersonGatherHelpers:
             "high-aspect-ratio test structure for conformality analysis."
         )
 
+    def test_frontmatter_not_flagged_mid_sentence(self):
+        from wikify.cli.work import _publisher_frontmatter
+        # Front-matter tokens appearing mid-sentence in body prose (not at
+        # line start) must NOT be rejected -- the regex is line-anchored.
+        assert not _publisher_frontmatter(
+            "The manuscript was accepted: the film showed 2 nm grains."
+        )
+        assert not _publisher_frontmatter(
+            "This mechanism, first reported with doi: 10.x context, saturates."
+        )
+        assert not _publisher_frontmatter(
+            "A special collection of oxide films was grown at 200 degC."
+        )
+
     def test_contribution_hint_matches_first_and_third_person(self):
         from wikify.cli.work import _PERSON_CONTRIB_HINT_RE
         for t in (
