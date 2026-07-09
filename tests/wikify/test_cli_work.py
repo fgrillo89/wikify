@@ -2373,3 +2373,87 @@ def test_concept_recall_proximity_no_graph_edges_table(tmp_path: Path) -> None:
 
     recall = _run_recall(bundle, corpus_root)["recall"]
     assert all(c["citation_proximity"] == 0.0 for c in recall["candidate_docs"])
+
+
+# ---------------------------------------------------------------------------
+# Person-path gather quality: front-matter rejection + contribution priority
+# ---------------------------------------------------------------------------
+
+
+class TestPersonGatherHelpers:
+    """Every build-evidence gather must feed dossiers substantive claim
+    sentences, not publisher front-matter that escaped is_boilerplate at
+    ingest, and must surface deep findings ahead of generic lead prose.
+    """
+
+    def test_frontmatter_rejected(self):
+        from wikify.cli.work import _publisher_frontmatter
+        assert _publisher_frontmatter("Cite as: J. Vac. Sci. Technol. A 38, 020804")
+        assert _publisher_frontmatter(
+            "Special Topic Collection: Reproducibility Challenges and Solutions"
+        )
+        assert _publisher_frontmatter("Submitted: 29 November 2019")
+        assert _publisher_frontmatter("Accepted: 21 January 2020")
+        assert _publisher_frontmatter("doi: 10.1116/1.5140603")
+        assert _publisher_frontmatter("https://doi.org/10.1116/1.5140603")
+
+    def test_real_contribution_text_kept(self):
+        from wikify.cli.work import _publisher_frontmatter
+        # A genuine contribution sentence must NOT be flagged front-matter.
+        assert not _publisher_frontmatter(
+            "We developed a reactor-scale simulation framework for ALD and ALE "
+            "that predicts saturation profiles in high-aspect-ratio features."
+        )
+        assert not _publisher_frontmatter(
+            "Puurunen and co-workers introduced the PillarHall lateral "
+            "high-aspect-ratio test structure for conformality analysis."
+        )
+
+    def test_frontmatter_not_flagged_mid_sentence(self):
+        from wikify.cli.work import _publisher_frontmatter
+        # Front-matter tokens appearing mid-sentence in body prose (not at
+        # line start) must NOT be rejected -- the regex is line-anchored.
+        assert not _publisher_frontmatter(
+            "The manuscript was accepted: the film showed 2 nm grains."
+        )
+        assert not _publisher_frontmatter(
+            "This mechanism, first reported with doi: 10.x context, saturates."
+        )
+        assert not _publisher_frontmatter(
+            "A special collection of oxide films was grown at 200 degC."
+        )
+
+    def test_contribution_hint_matches_first_and_third_person(self):
+        from wikify.cli.work import _PERSON_CONTRIB_HINT_RE
+        for t in (
+            "we develop a model",
+            "she proposed a mechanism",
+            "the authors demonstrated growth",
+            "this work introduces a method",
+            "established the saturation regime",
+        ):
+            assert _PERSON_CONTRIB_HINT_RE.search(t), t
+        # A pure byline / affiliation line carries no contribution verb.
+        assert not _PERSON_CONTRIB_HINT_RE.search(
+            "Angel Yanguas-Gil, Applied Materials Division, Argonne"
+        )
+
+    def test_claim_dense_marks_substance_over_framing(self):
+        from wikify.cli.work import _claim_dense
+        # Mechanism verbs and quantitative results are substantive findings.
+        assert _claim_dense(
+            "Nucleation proceeds by island growth and coalescence of "
+            "platinum nanoparticles."
+        )
+        assert _claim_dense(
+            "The growth-per-cycle saturates at 0.9 Angstrom/cycle above 200 degC."
+        )
+        assert _claim_dense("Particle size increased to 3.2 nm after 50 cycles")
+        # Generic framing / metadata is not claim-dense.
+        assert not _claim_dense(
+            "This paper describes how atomic layer deposition has evolved "
+            "over time."
+        )
+        assert not _claim_dense(
+            "Angel Yanguas-Gil, Applied Materials Division, Argonne"
+        )

@@ -637,6 +637,73 @@ def _has_identity_signal(text: str) -> bool:
     return bool(_IDENTITY_SIGNAL_RE.search(text or ""))
 
 
+# Gather quality: surface substantive claims, drop publisher front-matter.
+#
+# Two structural problems degrade any evidence gather (person, article seed,
+# and re-entry enrichment alike):
+#
+# 1. Publisher front-matter that escaped ``is_boilerplate`` at ingest --
+#    author bylines, "Cite as ...", "Special (Topic) Collection",
+#    submission/acceptance dates, bare DOI lines -- carries no content but
+#    occupies the per-doc cap. ``_publisher_frontmatter`` rejects it in every
+#    gather so it never enters a dossier.
+# 2. Chunks are otherwise taken in DOCUMENT ORDER, so a source's generic
+#    lead paragraphs (abstract / introduction) fill the cap before the
+#    substantive findings -- parameter effects, mechanism, quantitative
+#    results -- that sit deeper in the body and never get pulled.
+#    ``_claim_dense`` marks chunks that carry a contribution/mechanism verb
+#    or a number-with-unit; the seed phase tries those FIRST so the dossier
+#    is fed insight, not blurb. (The person maturity gate keys specifically
+#    on the contribution verbs, a subset of this signal.)
+_PERSON_CONTRIB_HINT_RE = re.compile(
+    r"\b(?:propos|introduc|develop|invent|discover|demonstrat|report|"
+    r"formulat|show|establish)(?:e|es|ed|s|n|ing)?\b",
+    re.IGNORECASE,
+)
+# Process / mechanism verbs whose presence marks a chunk as a substantive
+# finding rather than framing prose. Domain-agnostic surface deposition /
+# growth vocabulary; a chunk naming one of these is describing what happens,
+# not citing who wrote it.
+_MECHANISM_VERB_RE = re.compile(
+    r"\b(?:nucleat|aggregat|coalesc|sinter|diffus|saturat|adsorb|chemisorb|"
+    r"desorb|decompos|passivat|crystalliz|crystallis|dope|etch|oxidat|reduc|"
+    r"catalyz|catalys|inhibit|activat)\w*",
+    re.IGNORECASE,
+)
+# A number immediately followed by a common physical unit -- the signature of
+# a quantitative result (temperatures, thicknesses, doses, rates, sizes).
+_CLAIM_NUMERIC_RE = re.compile(
+    r"\d+(?:\.\d+)?\s?(?:%|nm|µm|um|Å|cycles?|sccm|Torr|mbar|Pa|"
+    r"eV|°C|wt\.?%|at\.?%|mol|min|hours?|s\b)",
+)
+# All alternatives are LINE-ANCHORED (``^`` under MULTILINE): publisher
+# front matter is line-structured, so anchoring avoids rejecting body prose
+# that merely contains one of these tokens mid-sentence (e.g. "...the paper
+# was accepted:" or a sentence naming a DOI).
+_PUBLISHER_FRONTMATTER_RE = re.compile(
+    r"(?im)^\s*(?:cite\s+(?:as|this)\b|citation:|"
+    r"special\s+(?:topic\s+)?collection|"
+    r"submitted:|accepted:|received:|"
+    r"doi:\s*10\.|https?://doi\.org)",
+)
+
+
+def _publisher_frontmatter(text: str) -> bool:
+    return bool(_PUBLISHER_FRONTMATTER_RE.search(text or ""))
+
+
+def _claim_dense(text: str) -> bool:
+    """True when a chunk reads like a substantive finding (contribution or
+    mechanism verb, or a quantitative value) rather than framing / metadata.
+    """
+    t = text or ""
+    return bool(
+        _PERSON_CONTRIB_HINT_RE.search(t)
+        or _MECHANISM_VERB_RE.search(t)
+        or _CLAIM_NUMERIC_RE.search(t)
+    )
+
+
 def _person_name_variants(card) -> set[str]:
     """Lowercased strings that specifically name the target author.
 
@@ -1014,6 +1081,7 @@ def cmd_build_evidence(
             "rejected_boilerplate": 0,
             "rejected_excluded_kind": 0,
             "rejected_never_cite": 0,
+            "rejected_frontmatter": 0,
             "rejected_short": 0,
             "rejected_already_committed": 0,
             "rejected_quote_not_in_chunk": 0,
@@ -1046,6 +1114,9 @@ def cmd_build_evidence(
                 continue
             if _matches_never_cite(text):
                 vetter_stats["rejected_never_cite"] += 1
+                continue
+            if _publisher_frontmatter(text):
+                vetter_stats["rejected_frontmatter"] += 1
                 continue
             raw_text = row["text"] or ""
             supplied_quote = entry.get("quote")
@@ -1204,6 +1275,7 @@ def cmd_build_evidence(
         "rejected_doc_cap": 0,
         "passes": 0,
         "identity_context_records": 0,
+        "rejected_frontmatter": 0,
     }
 
     def try_chunk(row, *, score: float, source: str) -> bool:
@@ -1218,6 +1290,11 @@ def cmd_build_evidence(
             return False
         if _matches_never_cite(text):
             stats["rejected_never_cite"] += 1
+            return False
+        # Drop publisher front-matter that escaped is_boilerplate so it cannot
+        # occupy the per-doc cap ahead of substantive claims (all kinds).
+        if _publisher_frontmatter(text):
+            stats["rejected_frontmatter"] += 1
             return False
         if any(r["chunk_id"] == row["chunk_id"] for r in records):
             return False
@@ -1247,7 +1324,16 @@ def cmd_build_evidence(
         doc_id = _resolve_doc_id(corpus, handle)
         if doc_id is None:
             continue
-        seed_chunks = fetch_seed_chunks(doc_id, per_doc_cap)
+        # Pull a wider slice of the seed doc and try claim-dense chunks
+        # FIRST, so the per-doc cap fills with substantive findings (mechanism,
+        # parameter effects, quantitative results) rather than the generic
+        # lead paragraphs that open a document. For a person card the
+        # contribution verbs the maturity gate counts are a subset of this
+        # signal, so the same ordering feeds that gate.
+        seed_chunks = sorted(
+            fetch_seed_chunks(doc_id, per_doc_cap * 4),
+            key=lambda r: 0 if _claim_dense(r["text"] or "") else 1,
+        )
         for row in seed_chunks:
             if len(records) >= target:
                 break
@@ -1365,6 +1451,7 @@ def cmd_build_evidence(
         f"identity={stats['identity_context_records']} "
         f"rejected=bp{stats['rejected_boilerplate']}/"
         f"nc{stats['rejected_never_cite']}/short{stats['rejected_short']}/"
+        f"fm{stats['rejected_frontmatter']}/"
         f"cap{stats['rejected_doc_cap']})"
     )
 

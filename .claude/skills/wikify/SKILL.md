@@ -479,19 +479,63 @@ When invoked on a bundle that already has `round_completed` events:
 3. If equal -> jump straight into SENSE and re-enter precedence as if
    mid-loop. Typically one CURATE pass and stop with
    `no_candidate_action`.
-4. If different:
+4. If different (a body of new literature arrived — the common re-entry
+   case, e.g. an author's papers were just ingested), run the **ENRICH
+   pass BEFORE the normal precedence**. A drift re-entry is not just a
+   SEED opportunity: most new docs are relevant to pages that already
+   exist, and unless their evidence is routed into those dossiers the new
+   literature never reaches the committed pages (the REFINE growth trigger
+   keys on a dossier's evidence outgrowing its write-time snapshot, so a
+   doc that never enters a dossier never triggers a rewrite). Steps:
    - Emit `corpus_drift_detected` with old + new fingerprints.
    - Compute `new_doc_ids = corpus_doc_ids - union(notebook.covered_docs)`.
-   - For each new doc, run a one-shot haiku Task asking "does this doc
-     materially overlap any existing dossier slug?" with the dossier
-     index summary as context. Append `new_doc_action_needed=true` to
-     any matched dossier (via a CLI subcommand or direct yaml edit
-     through `notebook` helpers).
-   - Queue unmatched docs for the next SEED wave (P1 on those docs).
-   - After the new docs are absorbed, re-stamp the stored fingerprint
-     so drift does not re-fire next round:
+   - **Route each new doc to the dossiers it belongs in (ENRICH), by
+     INSIGHT not by title.** A substantive paper (mechanism study, thesis,
+     parameter sweep) carries findings that belong to SEVERAL pages, and
+     those findings sit deep in the body — a title-only or document-order
+     gather pulls the abstract and front-matter and misses them. For each
+     new doc, and for each candidate slug it might feed, retrieve the doc's
+     chunks that actually carry the relevant insight:
+     `wikify corpus find "<slug facets>" --in-doc <doc> --format quiet`
+     (the query is a POSITIONAL argument, not a `--query` flag; `--format
+     quiet` prints one chunk handle per line to feed `--from-ids`),
+     where `<slug facets>` is the concept's title PLUS its specific
+     sub-topics/aliases (e.g. for a nucleation page: "nucleation delay,
+     island growth, coalescence, particle size versus cycles"; for a
+     process page: "growth per cycle, temperature window, precursor dose
+     saturation"). This returns relevance-ranked deep chunks; the gather's
+     claim-density ordering and front-matter rejection then keep substance
+     over blurb. GROW each matching slug with those chunk ids:
+     `wikify work build-evidence <slug> --from-ids <ids> --corpus <corpus>
+     --run <bundle>`, then emit the growth event `wikify work add evidence
+     <slug> --round <N> --run <bundle>` (build-evidence does not self-emit
+     it). A committed slug that gains evidence becomes a `refine-candidate`
+     and the REFINE wave rewrites its page to cover and cite the new work;
+     an uncommitted slug advances toward its gate. One rich doc routes its
+     distinct findings to MANY slugs — do not stop at the first match.
+     For a high-value source (large, high-citation, thesis / review), spend
+     a dedicated **deep-read explorer Task** (P2/P3 over that single doc's
+     chunk set) that emits `evidence_suggestion`s across every concept it
+     touches and `concept_suggestion`s for insight-clusters no page covers,
+     rather than a one-shot facet gather. This is what makes added
+     literature actually change the wiki rather than sit inert in the corpus.
+   - **Seed the genuinely-new concepts.** Docs that matched no existing
+     slug (they introduce a topic the wiki lacks) go to the next SEED wave
+     (P1 over those docs). New notable authors among the new docs open the
+     PERSON wave (their contribution evidence now exists).
+   - Re-stamp the stored fingerprint ONLY once EVERY new doc has been
+     accounted for — each one either grew at least one dossier (ENRICH),
+     was queued for SEED, or was explicitly judged irrelevant and recorded
+     as skipped. Do not re-stamp while any new doc is still unhandled: a
+     doc dropped before re-stamp is lost, because the next re-entry no
+     longer sees drift. Then:
      `wikify run set --corpus-fingerprint <new> --run <bundle>` (the
-     `<new>` value is `context_show().health.fingerprint`).
+     `<new>` value is `context_show().health.fingerprint`). Re-stamping
+     after the GROWs also means a crash mid-pass re-fires drift and retries
+     rather than silently skipping unabsorbed docs.
+   Then enter the normal precedence (WRITE/REFINE/GROW/…): the REFINE wave
+   drains the pages the ENRICH pass grew, and WRITE commits any new concept
+   or person that crossed its gate.
 
 ## Finalize (after STOP)
 
