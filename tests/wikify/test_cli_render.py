@@ -620,3 +620,30 @@ def test_normalize_math_escapes_fixes_overescaped_commands() -> None:
     out = _normalize_math_escapes(fenced)
     assert "```\n" + r"$$\\gamma$$" + "\n```" in out  # code fence intact
     assert out.endswith(r"$$\gamma$$")                # math outside collapsed
+
+
+def test_clean_evidence_lines_swallows_multiline_quote() -> None:
+    """A footnote whose dropped quote carries embedded newlines (a table /
+    OCR-broken chunk) must not leak its continuation lines as a stray
+    paragraph under ``## References``.
+    """
+    from wikify.render.html.render import _clean_evidence_lines
+
+    body = (
+        "Prose citing a source.[^e1]\n\n"
+        "## References\n\n"
+        '[^e1]: abc123def456 (doc:abc) > "2\n'
+        "O.H\n"
+        "2\n"
+        'O = H2O UV/thermal stability table dump"\n'
+    )
+    out = _clean_evidence_lines(
+        body, doc_meta_map={}, doc_index=None, kind="article"
+    )
+    # The garbled quote-continuation lines must NOT appear in the output.
+    assert "O.H" not in out
+    assert "O = H2O UV/thermal stability table dump" not in out
+    # The definition survives (reformatted) and prose/heading are intact.
+    assert "[^e1]:" in out
+    assert "Prose citing a source." in out
+    assert "## References" in out

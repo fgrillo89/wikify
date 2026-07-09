@@ -1270,11 +1270,23 @@ def _clean_evidence_lines(
                 cleaned, doc_meta_map=doc_meta_map, doc_index=doc_index,
             )
             continue
-        if in_def_block and not line.strip():
-            # Blank line between footnote definitions stays in the prose
-            # buffer; we re-emit footnotes in a single block at the end.
+        if in_def_block:
+            # Inside the footnote-definition block. A blank line separates
+            # definitions; a heading ends the block. Any other non-empty
+            # line is a CONTINUATION of the previous definition's quote --
+            # build-evidence stores ``text[:400]`` verbatim, so a chunk
+            # from a table or OCR-broken passage carries hard newlines and
+            # the definition spills onto extra lines. That quote is dropped
+            # anyway, so swallow the continuation; letting it fall through
+            # to ``body_lines`` is what leaked garbled fragments (e.g.
+            # ``2\nO.H\n2\nO = ...``) as a stray paragraph under
+            # ``## References``.
+            if not line.strip():
+                continue
+            if line.lstrip().startswith("#"):
+                in_def_block = False
+                body_lines.append(line)
             continue
-        in_def_block = False
         body_lines.append(line)
 
     if not parsed:
