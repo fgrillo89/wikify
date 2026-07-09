@@ -670,3 +670,38 @@ def test_add_heading_ids_matches_toc_anchors() -> None:
     # An existing id is preserved, not doubled.
     html2 = '<h2 id="custom">Title</h2>'
     assert _add_heading_ids(html2).count("id=") == 1
+
+
+def test_clean_evidence_lines_keeps_prose_after_closed_footnote() -> None:
+    """A closed (single-line) footnote must not swallow legitimate prose that
+    follows it -- only an unterminated multi-line quote is a continuation.
+    """
+    from wikify.render.html.render import _clean_evidence_lines
+
+    body = (
+        "Intro citing a source.[^e1]\n\n"
+        "## References\n\n"
+        '[^e1]: h1 (doc:a) > "a clean single-line quote"\n'
+        '[^e2]: h2 (doc:b) > "another clean quote"\n'
+        "Trailing prose that must survive.\n"
+    )
+    out = _clean_evidence_lines(body, doc_meta_map={}, doc_index=None, kind="article")
+    assert "Trailing prose that must survive." in out
+    assert "[^e1]:" in out and "[^e2]:" in out
+
+
+def test_add_heading_ids_dedupes_and_ignores_attr_value() -> None:
+    from wikify.render.html.render import _add_heading_ids, _build_toc
+
+    # Two headings normalising to the same slug get unique ids.
+    html = "<h2>Overview</h2><p>a</p><h2>Overview</h2>"
+    out = _add_heading_ids(html)
+    assert 'id="overview"' in out
+    assert 'id="overview-2"' in out
+    anchors = [t["id"] for t in _build_toc(out)]
+    assert anchors == ["overview", "overview-2"]
+
+    # A data-* attribute whose VALUE contains "id=" must not suppress injection.
+    html2 = '<h2 data-x="id=foo">Title</h2>'
+    out2 = _add_heading_ids(html2)
+    assert 'id="title"' in out2
