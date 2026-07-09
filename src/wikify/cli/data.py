@@ -120,7 +120,12 @@ def _enforce_data_recall(
         verified_docs = store.property_doc_stats(
             normalize_key(prop)
         )["docs_in_table"]
-        recall = round(verified_docs / max(docs_mentioning, 1), 4)
+        # Clamp to 1.0: if the whole-corpus sweep is stale (corpus grew since
+        # the last harvest-property) the live verified-doc count can exceed
+        # the snapshot's docs_mentioning, which would otherwise report an
+        # implausible recall > 1.0. A property extracted from every mentioning
+        # doc is simply fully covered.
+        recall = round(min(verified_docs / max(docs_mentioning, 1), 1.0), 4)
         if docs_mentioning >= DATA_RECALL_DOCS_FLOOR and recall < DATA_RECALL_MIN:
             cli_error(
                 EXIT_VALIDATION,
