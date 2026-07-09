@@ -1056,7 +1056,14 @@ def _recall_gate_bundle(
     bundle = Bundle(root=bdir)
     init_run(bundle, corpus_path="x")
     store = DataStore.open(bundle.root)
-    store.add_points([_verified("Al2O3", "GPC", "1.1", "A/cycle", "d1", "c1", "q1")])
+    # Seed one verified GPC point per intended in-table doc so the LIVE
+    # verified-doc count (what the recall gate now reads) matches the
+    # scenario's docs_in_table; always at least one so the table has a row.
+    n_docs = max(docs_in_table, 1)
+    store.add_points([
+        _verified("Al2O3", "GPC", "1.1", "A/cycle", f"d{i}", f"c{i}", f"q{i}")
+        for i in range(n_docs)
+    ])
     if docs_mentioning is not None:
         store.record_property_sweep(
             property="GPC",
@@ -1891,3 +1898,55 @@ def test_cli_harvest_property_warns_below_alias_min(
     assert res.exit_code == 0, res.output
     payload = json.loads(res.output)
     assert "warning" in payload  # only 1 phrasing (the canonical name)
+
+
+def test_data_recall_gate_reads_live_verified_docs(tmp_path: Path) -> None:
+    """The recall gate must measure recall from the live store, not the
+    harvest-property snapshot (which records docs_in_table=0 before any
+    extraction) -- otherwise no first-ever table could ever clear the gate.
+    """
+    import pytest
+    import typer
+
+    from wikify.cli.data import _enforce_data_recall
+    from wikify.data.models import ArtifactSpec, DataPoint
+    from wikify.data.verify import verify_point
+
+    store = DataStore(tmp_path / "claims.db")
+
+    def _verified(prop: str, i: int) -> DataPoint:
+        p = DataPoint(
+            subject=f"m{i}", property=prop, value_text="3.2",
+            value_original="3.2 eV", unit="eV", doc_id=f"{prop[:2]}{i}",
+            chunk_id=f"c{prop[:2]}{i}", grounding_quote="band gap 3.2 eV",
+            value_type="scalar",
+        ).finalize()
+        verify_point(p, chunk_text="the band gap 3.2 eV was measured")
+        assert p.verification_status == "verified"
+        return p
+
+    # Snapshot from harvest-property BEFORE extraction: docs_in_table = 0.
+    store.record_property_sweep(
+        property="band gap", property_norm="band gap", docs_mentioning=100,
+        docs_extracted=0, docs_in_table=0, candidate_chunks=200, truncated=False,
+    )
+    # Extract verified points from 80 distinct docs -> live recall 0.80.
+    store.add_points([_verified("band gap", i) for i in range(80)])
+    spec = ArtifactSpec(
+        artifact_id="a", title="Band Gap", properties=["band gap"],
+    )
+    # Must NOT raise: the live count (80/100) clears the 0.75 bar even though
+    # the persisted snapshot still says docs_in_table = 0.
+    _enforce_data_recall(store, spec, skip_recall=False)
+
+    # A genuinely sparse property (1/100) must still be blocked.
+    store.record_property_sweep(
+        property="pulse time", property_norm="pulse time", docs_mentioning=100,
+        docs_extracted=0, docs_in_table=0, candidate_chunks=50, truncated=False,
+    )
+    store.add_points([_verified("pulse time", 0)])
+    spec2 = ArtifactSpec(
+        artifact_id="b", title="Pulse Time", properties=["pulse time"],
+    )
+    with pytest.raises((SystemExit, typer.Exit, typer.BadParameter)):
+        _enforce_data_recall(store, spec2, skip_recall=False)

@@ -523,6 +523,21 @@ When invoked on a bundle that already has `round_completed` events:
      slug (they introduce a topic the wiki lacks) go to the next SEED wave
      (P1 over those docs). New notable authors among the new docs open the
      PERSON wave (their contribution evidence now exists).
+   - **Refresh the DATA layer too — new literature carries new numbers.**
+     The page ENRICH above does not touch data artifacts, so committed
+     tables silently go stale after an ingest (their harvested values
+     predate the new docs). For every property backing a committed table
+     (`wikify data list-artifacts`), and any ripe property a new table
+     could now cover, re-run the whole-corpus sweep so it sees the new
+     docs — `wikify data harvest-property --property <p> ... --corpus
+     <corpus> --run <bundle>` — dispatch an `extract-data` Task to verify
+     and `data add` the fresh candidates, then `wikify data rebuild --run
+     <bundle>` (which re-derives every committed table from its spec, so
+     new points flow in automatically). Commit any newly-ripe table with
+     `consolidate --require-recall`; the gate reads the LIVE verified-doc
+     count, so a well-harvested property passes and a thinly-sampled one is
+     correctly refused. Skipping this step is why a re-entered wiki ships
+     tables that omit the very papers just added.
    - Re-stamp the stored fingerprint ONLY once EVERY new doc has been
      accounted for — each one either grew at least one dossier (ENRICH),
      was queued for SEED, or was explicitly judged irrelevant and recorded
