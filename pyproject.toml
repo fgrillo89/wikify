@@ -21,7 +21,7 @@ dependencies = [
     "python-docx>=1.1",
     "python-pptx>=0.6.23",
     "trafilatura>=2.1.0",
-    "docling>=2.107.0",
+    "docling>=2.113.0",
     # Embeddings / ML stack. CPU onnxruntime is the portable default; the
     # onnxruntime-gpu Linux wheel hard-links libcudart at import, so it
     # cannot ship as a default dep (it breaks every CPU/CI host). GPU is an
@@ -36,7 +36,7 @@ dependencies = [
     "torchvision>=0.21.0",
     "transformers>=4.48,<4.52",
     "opencv-python-headless>=4.13.0.92,<4.14",
-    "hf-xet>=1.5.1",
+    "hf-xet>=1.5.2",
     # Numerical / graph
     "scipy>=1.18.0",  # pulled in by networkx.pagerank inside ingest/pipeline.py
     "networkx>=3.6.1",
@@ -52,7 +52,7 @@ dependencies = [
     # Templating and rendering
     "jinja2>=3.1",
     "markdown>=3.10.2",
-    "pymdown-extensions>=11.0",
+    "pymdown-extensions>=11.0.1",
     # CLI / config / protocol
     "typer>=0.12",
     "pyyaml>=6.0.3",
@@ -61,8 +61,8 @@ dependencies = [
 
 [project.optional-dependencies]
 gdrive = ["google-api-python-client>=2.198.0", "google-auth-oauthlib>=1.4.0"]
-lite = ["pymupdf>=1.24", "pymupdf4llm>=1.27.2.3"]
-plot = ["matplotlib>=3.7"]
+lite = ["pymupdf>=1.28.0", "pymupdf4llm>=1.27.2.3"]
+plot = ["matplotlib>=3.11.1"]
 
 [project.scripts]
 wikify = "wikify.cli:main"
