@@ -68,7 +68,7 @@ Eight workflow nouns plus the MCP server control noun. All under
 | `wikify corpus` | Build, refresh, check a corpus; list/find/show docs and chunks; open a warm REPL. |
 | `wikify run` | Initialise, lock, set, list events, show, sense (one-shot round snapshot), record per-round metrics, plot stats, and close a run. |
 | `wikify work` | Manage in-flight build state: concepts, evidence, inbox, claims, per-concept evidence recall, tend. |
-| `wikify data` | Harvest verifiable numbers into the claim store; sweep whole-corpus property recall; consolidate and commit data-artifact tables (recall-gatable). |
+| `wikify data` | Harvest verifiable numbers into the claim store; sweep whole-corpus property recall; reindex derived keys and relabel claims; consolidate and commit data-artifact tables (recall-gatable). |
 | `wikify draft` | Build, show, check, and finalize (recall-gatable) the per-attempt draft/response/validation triple. |
 | `wikify wiki` | List/find/show committed pages; open a warm REPL; build projections; commit a validated concept. |
 | `wikify render` | Render a bundle to a static HTML site. |
@@ -135,12 +135,26 @@ Every committed page enforces:
 - `[^eN]` markers in prose resolve 1:1 to `[^eN]:` definitions in a
   `## References` block.
 - Each `[^eN]:` definition carries `<chunk_id> (<doc_id>) > "<quote>"`.
+- `N` is a **1-based index into the draft's `evidence` array**, not a
+  free label: `[^e7]` addresses `evidence[6]`, and the definition's
+  `<chunk_id>` must equal `evidence[N-1].chunk_id`. A definition naming a
+  different entry's chunk fails. `wikify draft check` reports it as
+  `marker_evidence_mismatch`; `wikify draft normalize-references` refuses
+  on the same condition but surfaces it as `normalization_failed` (it
+  rewrites definitions from the marker index, and would otherwise launder
+  a mis-numbered marker into a well-formed citation to the wrong paper).
+  Both read the definitions through one shared parser so they cannot
+  disagree about which definitions exist.
 - The `<quote>` is a verbatim substring of the cited chunk's source
   text. `wikify draft check` enforces this; `wikify wiki commit`
   re-checks under the run lock.
 
 A fabricated quote echoed in the body but absent from the source
-chunk fails validation; the page never reaches `wiki/articles/`.
+chunk fails validation; the page never reaches `wiki/articles/`. The
+index rule matters independently of the quote rule: a quote often occurs
+in more than one gathered chunk (adjacent chunks from one paper overlap),
+so a freely numbered marker can satisfy the quote check while attributing
+the claim to the wrong source.
 
 ## Telemetry contract
 
@@ -160,7 +174,7 @@ Allowed event types: `stage_changed`, `cli_invoked`,
 `round_completed`, `dossier_promoted`, `dossier_stalled`,
 `dossier_parked`, `pattern_dispatched`, `corpus_drift_detected`,
 `page_embedding_failed`, `data_page_collision_skipped`,
-`page_recall_cleared`. The complete, authoritative set is
+`page_recall_cleared`, `editor_ruling`. The complete, authoritative set is
 `VALID_EVENT_TYPES` in `bundle/run/events.py`.
 
 Cost is computed on demand by

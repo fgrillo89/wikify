@@ -262,6 +262,28 @@ those rows, never hand-edited. Because data points carry the same
 `chunk_id` / `doc_id` references as wiki evidence, a data table traces
 back to the corpus the same way a page does.
 
+Two columns are **derived**, not authored: `subject_norm` and
+`property_norm` are computed from `subject` / `property` by
+`normalize_key` at write time, and every lookup that filters by subject or
+property — an `ArtifactSpec.subjects` filter, `data list --subject`, the
+`property_registry` rollup — matches on the normalized column. That makes
+them a staleness hazard: a claim written by an older revision of
+`normalize_key` keeps the older spelling, so the filter silently matches
+nothing and the table renders zero rows with no error. `wikify data
+reindex` recomputes both columns over every stored claim, and
+`consolidate` now refuses a non-empty `subjects` filter that matches no
+claim (`subjects_filter_unmatched`) rather than emitting an empty table.
+
+`claim_id` is a content hash that includes the two normalized keys, but
+`wikify data relabel` — which rewrites a claim's `subject` / `property`
+label so a row heading can move from ASCII to inline LaTeX without
+re-extracting and re-verifying the number — deliberately does **not**
+recompute it. The id is the row identity that `data_artifact_claims` and
+the committed `.dataspec.json` sidecars reference; re-keying on a label
+edit would orphan both. The consequence is that after a relabel the id no
+longer reproduces from the row's current content, which is the intended
+trade: referential integrity over hash purity.
+
 A `property_sweeps` table records the bookkeeping behind the
 property-targeted data-recall gate. Each row (keyed on `property_norm`,
 with the display `property`) captures the most recent whole-corpus

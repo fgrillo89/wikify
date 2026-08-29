@@ -10,6 +10,8 @@ spec::
     wikify data show <claim_id>
     wikify data query --subject S [--property P] --format json
     wikify data coverage
+    wikify data reindex --run <bundle>
+    wikify data relabel <claim_id> --subject S [--property P] --run <bundle>
     wikify data consolidate spec.json --run <bundle>
     wikify data commit <artifact_id> --run <bundle>
     wikify data rebuild [<artifact_id>] --run <bundle>
@@ -39,7 +41,7 @@ from ..data.artifact_page import (
     register_artifact_wiki_page,
     write_artifact_page,
 )
-from ..data.consolidate import consolidate
+from ..data.consolidate import SubjectFilterUnmatchedError, consolidate
 from ..data.harvest import source_text_for, sweep_property_candidates
 from ..data.models import ArtifactSpec, DataPoint, normalize_key
 from ..data.store import DataStore
@@ -60,6 +62,13 @@ def _wiki_mutation_lock(bundle: Bundle, op: str):
         cli_error(EXIT_LOCK_HELD, error="lock_held", message=str(exc))
     except DataPageCollisionError as exc:
         cli_error(EXIT_VALIDATION, error="page_id_collision", message=str(exc))
+    except SubjectFilterUnmatchedError as exc:
+        cli_error(
+            EXIT_VALIDATION,
+            error="subjects_filter_unmatched",
+            message=str(exc),
+            requested=exc.requested,
+        )
 
 app = typer.Typer(add_completion=False, help="Factual-data claim store + data artifacts.")
 
@@ -139,6 +148,99 @@ def _enforce_data_recall(
                     "harvest-property + extract more, or pass --skip-recall"
                 ),
             )
+
+
+def _publish_blockers(
+    table, *, spec_subjects: list[str] | None = None
+) -> list[dict]:
+    """Reasons *table* must not be published.
+
+    Applies to a first-ever publish as well as to overwriting an existing page:
+    shipping a table whose spec no longer resolves is wrong either way.
+
+    ONE gate for every publish path (`consolidate --commit`, `commit`,
+    `rebuild`). It tests one thing: **does the spec still reference data that
+    resolves?**
+
+    - ``missing_subjects``  - a spec subject matches no stored claim at all;
+    - a spec subject that resolves to NO ROW in this table. This is the subset
+      case ``missing_subjects`` cannot see: it tests ``store.subjects()``, so a
+      subject whose label survives on some other property still counts as
+      resolving even when the claim THIS table needs went stale;
+    - ``empty_columns``     - a spec property contributes no cell anywhere;
+    - zero rows             - the projection is empty however it got there.
+
+    Each is a spec/data mismatch with a mechanical fix (a spelling, ``wikify
+    data reindex`` after a ``normalize_key`` revision, or verifying the
+    claims), and together they are how a stale norm key silently deletes a row
+    or blanks a column on a committed page.
+
+    What this deliberately does NOT block is EVOLUTION. An earlier version
+    keyed on "no claim the committed page cites may disappear", which is a
+    stronger invariant than the subsystem can support: a data artifact is a
+    materialized view that re-derives as evidence lands, so claims churn by
+    design. One new paper reporting a conflicting value collapses agreeing
+    claims into a conflict cell and legitimately drops citations - under the
+    evidence rule that permanently jammed the artifact, on the single most
+    normal event in a literature corpus. Narrowing caused by real data
+    movement is the feature; narrowing caused by a spec that no longer
+    resolves is the bug.
+    """
+    blockers: list[dict] = []
+    if table.missing_subjects:
+        blockers.append({
+            "error": "subjects_filter_partially_unmatched",
+            "missing_subjects": table.missing_subjects,
+            "message": (
+                f"{len(table.missing_subjects)} spec subject(s) match no stored "
+                f"claim ({table.missing_subjects}); publishing would ship a "
+                "table without their rows. Fix the spec spelling, run `wikify "
+                "data reindex`, or drop them from `subjects`."
+            ),
+        })
+    if spec_subjects:
+        rendered = {normalize_key(r["subject"]) for r in table.rows}
+        without_rows = [
+            subj for subj in spec_subjects if normalize_key(subj) not in rendered
+        ]
+        if without_rows:
+            blockers.append({
+                "error": "subjects_without_rows",
+                "subjects_without_rows": without_rows,
+                "message": (
+                    f"{len(without_rows)} spec subject(s) contribute no row to "
+                    f"this table ({without_rows}); the page would not carry "
+                    "them. Possible causes: no claim for this subject and "
+                    "property yet, a stale `subject_norm` (run `wikify data "
+                    "reindex`), a spelling that differs from the spec, or a "
+                    "verification status the spec's `min_verification` excludes."
+                ),
+            })
+    if table.empty_columns:
+        blockers.append({
+            "error": "properties_without_cells",
+            "empty_columns": table.empty_columns,
+            "message": (
+                f"{len(table.empty_columns)} spec propert(ies) contribute no "
+                f"cell to this table ({table.empty_columns}); the page would "
+                "carry a blank column and none of its references. Possible "
+                "causes: no claim for this property yet, a stale "
+                "`property_norm` (run `wikify data reindex`), a spelling that "
+                "differs from the spec, or a verification status the spec's "
+                "`min_verification` excludes (the default admits `verified` "
+                "and `conflict`). Check `wikify data list --property <p>`."
+            ),
+        })
+    if table.n_rows == 0:
+        blockers.append({
+            "error": "empty_table",
+            "message": (
+                "the table resolves to zero rows; the page would be empty. "
+                "Check the spec's properties and subjects against `wikify data "
+                "list`."
+            ),
+        })
+    return blockers
 
 
 def _resolve_bundle(bundle_flag: Path | None) -> Bundle:
@@ -366,6 +468,99 @@ def cmd_coverage(
     typer.echo(_human(cov))
 
 
+@app.command("reindex")
+def cmd_reindex(
+    run: Path | None = typer.Option(None, "--run"),
+    fmt: str = typer.Option("text", "--format"),
+) -> None:
+    """Recompute ``subject_norm`` / ``property_norm`` over every stored claim.
+
+    The norm columns are derived by ``normalize_key`` at write time, so points
+    written by an older revision of it keep the older spelling and every
+    norm-keyed lookup (the ``subjects`` filter of a data-artifact spec,
+    ``data list --subject``, the property registry) silently misses them. Run
+    this after upgrading, or when a spec's ``subjects`` filter matches nothing
+    you can see in ``data list``.
+    """
+    bundle = _resolve_bundle(run)
+    store = DataStore.open(bundle.root)
+    try:
+        result = store.reindex_norm_keys()
+    finally:
+        store.close()
+    _emit({"ok": True, **result}, fmt)
+
+
+@app.command("relabel")
+def cmd_relabel(
+    claim_id: str = typer.Argument(..., help="Claim id to relabel."),
+    run: Path | None = typer.Option(None, "--run"),
+    subject: str | None = typer.Option(None, "--subject", help="New subject text."),
+    property: str | None = typer.Option(None, "--property", help="New property text."),
+    force: bool = typer.Option(
+        False,
+        "--force",
+        help=(
+            "Relabel even when a committed data artifact filters on the old "
+            "subject OR property key and would lose this row on its next "
+            "rebuild."
+        ),
+    ),
+    fmt: str = typer.Option("text", "--format"),
+) -> None:
+    """Rewrite a claim's ``subject`` / ``property`` label without touching its
+    value or provenance.
+
+    The label is presentation (it becomes a table row/column heading), so
+    rewriting it (e.g. from ASCII ``sigma_D`` to inline LaTeX
+    ``$\\sigma_D$``) must not require re-extracting and re-verifying it. The
+    verification gate is unaffected: it grounds the VALUE in the source quote,
+    which this never changes. Derived norm keys are recomputed.
+    """
+    if subject is None and property is None:
+        cli_error(
+            EXIT_VALIDATION,
+            error="nothing_to_do",
+            message="pass --subject and/or --property",
+        )
+    bundle = _resolve_bundle(run)
+    store = DataStore.open(bundle.root)
+    try:
+        row = store.get_point(claim_id)
+        if row is None:
+            cli_error(EXIT_VALIDATION, error="not_found", message=claim_id)
+        # A relabel rewrites the norm key a committed spec filters on -
+        # `subject_norm` for its rows, `property_norm` for its columns - so the
+        # row silently disappears from any page built on the old spelling.
+        # Both axes are checked; `spec.properties` is mandatory where
+        # `subjects` is optional, so the property is the likelier orphan path.
+        affected = store.artifacts_naming(
+            subject_norm=row["subject_norm"] if subject is not None else None,
+            property_norm=row["property_norm"] if property is not None else None,
+        )
+        if affected and not force:
+            cli_error(
+                EXIT_VALIDATION,
+                error="committed_artifact_filters_on_label",
+                artifacts=affected,
+                message=(
+                    f"{len(affected)} committed artifact(s) filter on the "
+                    f"current label and would lose this row on the next "
+                    f"rebuild: {[a['artifact_id'] for a in affected]}. Update "
+                    "the matching spec subjects/properties to the new label "
+                    "too, or pass --force."
+                ),
+            )
+        updated = store.relabel_point(claim_id, subject=subject, property=property)
+    finally:
+        store.close()
+    _emit(
+        {"ok": True, "claim_id": claim_id, **updated,
+         "artifacts_needing_spec_update": affected},
+        fmt,
+    )
+
+
 @app.command("harvest-property")
 def cmd_harvest_property(
     property: str = typer.Option(..., "--property", help="Canonical property name."),
@@ -496,17 +691,40 @@ def cmd_consolidate(
             if commit and require_recall:
                 _enforce_data_recall(store, artifact_spec, skip_recall)
             table = consolidate(store, artifact_spec)
-            store.upsert_artifact(artifact_spec, n_rows=table.n_rows)
-            store.set_artifact_claims(artifact_spec.artifact_id, table.claim_ids)
+            blockers = _publish_blockers(table, spec_subjects=artifact_spec.subjects)
+            already_published = (store.get_artifact(artifact_spec.artifact_id) or {}
+                                 ).get("status") == "committed"
+            if commit and blockers:
+                # Refuse BEFORE touching the store or the disk. Narrowing
+                # `n_rows` / `data_artifact_claims` and then refusing would
+                # desync the claim-link graph from a page that still cites the
+                # dropped rows.
+                cli_error(EXIT_VALIDATION, error=blockers[0]["error"],
+                          blockers=blockers, message=blockers[0]["message"])
+            if commit:
+                # Preflight the page-id collision BEFORE any store or file
+                # write, so a rejected commit leaves nothing half-applied.
+                check_data_page_id_free(
+                    bundle, artifact_spec.title, artifact_spec.artifact_id
+                )
+            if commit or not already_published:
+                # Only a COMMIT may rewrite the stored artifact once it is
+                # published. A draft build that touched it would rewrite
+                # `spec_json`, `n_rows` and the claim links of a page it
+                # explicitly declined to publish - and `rebuild` reads
+                # `spec_json`, so the next unattended sweep would ship the
+                # draft's spec over the committed page.
+                # upsert FIRST: `INSERT OR REPLACE` on data_artifacts fires
+                # the ON DELETE CASCADE for data_artifact_claims, so writing
+                # the links before it would delete them again.
+                store.upsert_artifact(artifact_spec, n_rows=table.n_rows)
+                store.set_artifact_claims(artifact_spec.artifact_id, table.claim_ids)
             available = (
                 [p["property_norm"] for p in store.properties()]
                 if table.empty_columns else []
             )
             page_path = None
             if commit:
-                # Preflight the page-id collision BEFORE writing any files, so a
-                # rejected commit leaves no orphaned wiki/data page on disk.
-                check_data_page_id_free(bundle, artifact_spec.title, artifact_spec.artifact_id)
                 page_path = write_artifact_page(bundle.wiki_data_dir, artifact_spec, table)
                 register_artifact_wiki_page(bundle, artifact_spec, table)
                 store.set_artifact_status(artifact_spec.artifact_id, "committed")
@@ -521,11 +739,18 @@ def cmd_consolidate(
             "claims": len(table.claim_ids),
             "conflicts": table.n_conflicts,
             "empty_columns": table.empty_columns,
+            "missing_subjects": table.missing_subjects,
+            "publish_blockers": blockers,
             "available_properties": available,
             "committed": str(page_path) if page_path else False,
         },
         fmt,
     )
+    if table.missing_subjects and fmt != "json":
+        typer.echo(
+            f"warning:  {len(table.missing_subjects)} spec subject(s) matched no "
+            f"stored claim and produced no rows: {table.missing_subjects}"
+        )
     if table.empty_columns and fmt != "json":
         typer.echo(
             f"warning:  {len(table.empty_columns)} spec propert(ies) matched no "
@@ -567,9 +792,18 @@ def cmd_commit(
             if require_recall:
                 _enforce_data_recall(store, spec, skip_recall)
             table = consolidate(store, spec)
-            store.set_artifact_claims(artifact_id, table.claim_ids)
-            store.upsert_artifact(spec, n_rows=table.n_rows)
+            blockers = _publish_blockers(table, spec_subjects=spec.subjects)
+            if blockers:
+                # The same gate `consolidate --commit` and `rebuild` apply:
+                # `commit` is the documented second half of the two-step
+                # publish flow, so leaving it open would let the sanctioned
+                # path publish what the other two refuse.
+                cli_error(EXIT_VALIDATION, error=blockers[0]["error"],
+                          blockers=blockers, message=blockers[0]["message"])
             check_data_page_id_free(bundle, spec.title, spec.artifact_id)
+            # upsert FIRST — see the cascade note in `cmd_consolidate`.
+            store.upsert_artifact(spec, n_rows=table.n_rows)
+            store.set_artifact_claims(artifact_id, table.claim_ids)
             page_path = write_artifact_page(bundle.wiki_data_dir, spec, table)
             register_artifact_wiki_page(bundle, spec, table)
             store.set_artifact_status(artifact_id, "committed")
@@ -593,7 +827,8 @@ def cmd_rebuild(
     claim store (the evolving-artifact property).
     """
     bundle = _resolve_bundle(run)
-    rebuilt = []
+    rebuilt: list[dict] = []
+    skipped: list[dict] = []
     with _wiki_mutation_lock(bundle, "rebuild"):
         store = DataStore.open(bundle.root)
         try:
@@ -601,14 +836,62 @@ def cmd_rebuild(
                 recs = [store.get_artifact(artifact_id)]
                 if recs[0] is None:
                     cli_error(EXIT_VALIDATION, error="not_found", message=artifact_id)
+                if recs[0].get("status") != "committed":
+                    # Rebuild REFRESHES published pages. Letting it publish a
+                    # draft would put a live page on disk without `--commit`
+                    # and without the data-recall gate that `commit` enforces.
+                    cli_error(
+                        EXIT_VALIDATION,
+                        error="artifact_not_committed",
+                        artifact_id=artifact_id,
+                        message=(
+                            f"artifact {artifact_id!r} is a draft; `rebuild` "
+                            "refreshes committed pages only. Publish it with "
+                            "`wikify data commit` first."
+                        ),
+                    )
             else:
                 recs = [r for r in store.list_artifacts() if r["status"] == "committed"]
             for rec in recs:
                 spec = ArtifactSpec.from_json(rec["spec_json"])
-                table = consolidate(store, spec)
-                store.set_artifact_claims(spec.artifact_id, table.claim_ids)
+                try:
+                    table = consolidate(store, spec)
+                except SubjectFilterUnmatchedError as exc:
+                    # Rebuild walks every committed artifact. Aborting on one
+                    # bad spec would leave the artifacts already rebuilt in
+                    # this loop written to disk and re-registered while the
+                    # rest keep stale pages — a half-applied mutation. Skip
+                    # the artifact, report it, and let the others finish.
+                    skipped.append(
+                        {"artifact_id": spec.artifact_id,
+                         "error": "subjects_filter_unmatched",
+                         "message": str(exc)}
+                    )
+                    continue
+                blockers = _publish_blockers(table, spec_subjects=spec.subjects)
+                if blockers:
+                    # Rebuild is unattended and walks every committed artifact,
+                    # so it is the most destructive place to publish a narrowed
+                    # table. Leave the committed page in place and report.
+                    skipped.append(
+                        {"artifact_id": spec.artifact_id, **blockers[0],
+                         "blockers": blockers}
+                    )
+                    continue
+                try:
+                    # Preflight BEFORE any store write, and per-artifact: an
+                    # uncaught collision would abort the sweep mid-loop, which
+                    # is the half-applied mutation the skip above exists to
+                    # avoid.
+                    check_data_page_id_free(bundle, spec.title, spec.artifact_id)
+                except DataPageCollisionError as exc:
+                    skipped.append(
+                        {"artifact_id": spec.artifact_id,
+                         "error": "page_id_collision", "message": str(exc)}
+                    )
+                    continue
                 store.upsert_artifact(spec, n_rows=table.n_rows)
-                check_data_page_id_free(bundle, spec.title, spec.artifact_id)
+                store.set_artifact_claims(spec.artifact_id, table.claim_ids)
                 page_path = write_artifact_page(bundle.wiki_data_dir, spec, table)
                 register_artifact_wiki_page(bundle, spec, table)
                 rebuilt.append(
@@ -617,7 +900,12 @@ def cmd_rebuild(
                 )
         finally:
             store.close()
-    _emit({"ok": True, "rebuilt": rebuilt}, fmt)
+    _emit({"ok": not skipped, "rebuilt": rebuilt, "skipped": skipped}, fmt)
+    if skipped:
+        # The sweep finished (no half-applied mutation), but committed pages
+        # were left stale. Exit non-zero so a batch loop that checks status
+        # notices instead of reading it as a clean rebuild.
+        raise typer.Exit(code=EXIT_VALIDATION)
 
 
 @app.command("list-artifacts")

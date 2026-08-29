@@ -69,6 +69,59 @@ def test_tend_drains_evidence_suggestions(tmp_path: Path) -> None:
     assert {r.chunk_id for r in records} == {"d1:1", "d1:2"}
 
 
+def test_tend_emits_evidence_added_for_drained_slugs(tmp_path: Path) -> None:
+    """`work tend` is the third path that appends evidence, alongside `work add
+    evidence` and `work build-evidence`. The growth-stall maturity gate keys
+    off `evidence_added`, and the editor is told never to hand-emit it, so a
+    slug grown only by an inbox drain would read as permanently stalled."""
+    from wikify.bundle.run.events import read_events
+
+    bundle = _bundle(tmp_path)
+    init_run(bundle, corpus_path="data/corpora/foo")
+    create_concept(bundle, page_id="ALD")
+    for cid in ("d1:1", "d1:2"):
+        append_inbox(
+            bundle, "evidence_suggestions",
+            {"concept": "ald", "chunk_id": cid, "doc_id": "d1", "score": 0.9},
+        )
+    tend_bundle(bundle)
+
+    grown = [e for e in read_events(bundle) if e.type == "evidence_added"]
+    assert len(grown) == 1
+    assert grown[0].concept_id == "ald"
+    assert grown[0].data["n"] == 2
+    assert grown[0].data["source"] == "tend"
+
+    # A drain that appends nothing must NOT emit: a spurious event resets the
+    # slug's stall timer for a round it did not grow.
+    tend_bundle(bundle)
+    assert len([e for e in read_events(bundle) if e.type == "evidence_added"]) == 1
+
+
+def test_tend_does_not_emit_growth_for_a_re_suggested_chunk(tmp_path: Path) -> None:
+    """`append_evidence` does not dedup and `tend_bundle` runs `dedup_evidence`
+    later in the SAME pass, so an inbox record re-suggesting a chunk already in
+    the ledger appends and is then removed. Emitting on the raw append count
+    would clear the growth-stall gate for a round that grew nothing."""
+    from wikify.bundle.run.events import read_events
+
+    bundle = _bundle(tmp_path)
+    init_run(bundle, corpus_path="data/corpora/foo")
+    create_concept(bundle, page_id="ALD")
+    append_evidence(
+        bundle, "ald", [EvidenceRecord(chunk_id="d1:1", doc_id="d1", status="active")]
+    )
+    append_inbox(
+        bundle, "evidence_suggestions",
+        {"concept": "ald", "chunk_id": "d1:1", "doc_id": "d1", "score": 0.9},
+    )
+    tend_bundle(bundle)
+
+    active = {r.chunk_id for r in read_evidence(bundle, "ald") if r.status == "active"}
+    assert active == {"d1:1"}  # net growth zero
+    assert [e for e in read_events(bundle) if e.type == "evidence_added"] == []
+
+
 def test_tend_skips_evidence_for_unknown_concept(tmp_path: Path) -> None:
     bundle = _bundle(tmp_path)
     append_inbox(

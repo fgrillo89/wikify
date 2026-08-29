@@ -1341,14 +1341,143 @@ def _sqlite_health(corpus: Corpus, *, full: bool) -> dict:
             "sqlite_embedding_spaces": spaces,
             "metrics_corpus_citation_stale": is_stale(store.con, "corpus_citation"),
             "available_metrics": _available_metrics(store.con),
+            "degenerate_metrics": degenerate_ranking_metrics(store.con),
         }
         if full:
             out["sqlite_n_edges"] = store.con.execute(
                 "SELECT COUNT(*) FROM graph_edges",
             ).fetchone()[0]
+            out["text_defects"] = _text_defect_counts(store.con)
         return out
     finally:
         store.close()
+
+
+# C0 controls except tab/newline/CR, plus the C1 block: what a dropped
+# ligature leaves behind (`di\x0fusivity` for `diffusivity`).
+_CONTROL_CHAR_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]")
+# A soft hyphen (U+00AD) BETWEEN two letters, i.e. inside an ordinary word.
+_INWORD_SOFT_HYPHEN_RE = re.compile(r"(?<=\w)­(?=\w)")
+
+
+def _text_defect_counts(con) -> dict:
+    """Chunks carrying extraction artifacts that make a span UNQUOTABLE.
+
+    A verbatim quote must match the stored chunk text exactly, so a chunk whose
+    words are broken by a dropped-ligature control character
+    (``di<0x0f>usivity`` for ``diffusivity``) or by a soft hyphen inside an
+    ordinary word (``real­world``) cannot be cited at all — the writer
+    retypes the word it renders as and the grounding gate rejects it. Both are
+    exact-match counts over ``chunks.text``; reported so an editor sees the
+    scale before dispatching writers.
+    """
+    n_control = 0
+    n_soft_hyphen = 0
+    for (text,) in con.execute("SELECT text FROM chunks"):
+        if not text:
+            continue
+        if _CONTROL_CHAR_RE.search(text):
+            n_control += 1
+        if _INWORD_SOFT_HYPHEN_RE.search(text):
+            n_soft_hyphen += 1
+    return {
+        "chunks_with_control_chars": n_control,
+        "chunks_with_soft_hyphens": n_soft_hyphen,
+    }
+
+
+# A ranking metric is degenerate when a "top-K by <metric>" consumer cannot
+# fill K with distinguishable nodes and silently falls back to the tie-break
+# (alphabetical order). Two conditions, BOTH required:
+#
+#   1. the largest tied block (the MODE, wherever it sits in the range) covers
+#      more than ``_DEGENERATE_TIED_SHARE`` of the nodes, and
+#   2. fewer than ``_DEGENERATE_MIN_DISTINGUISHED`` nodes rank strictly above
+#      that block.
+#
+# Condition 2 is what makes the rule about the TOP of the ranking rather than
+# about ties in general. ``refresh_citation_count`` writes a row per document
+# via COALESCE(..., 0), so most documents sit at 0 — a huge tied block at the
+# BOTTOM. That is flagged only when fewer than K documents have any citations
+# at all, which is the case where a top-K genuinely is mostly alphabetical
+# padding. A corpus with a well-spread head is never flagged, however large
+# its zero block.
+_DEGENERATE_TIED_SHARE = 0.90
+_DEGENERATE_MIN_NODES = 10
+# The largest top-K a caller actually takes: ``_sizing_knobs`` clamps
+# ``wave_size`` to 12 (cli/run.py) and ``corpus find --top-k`` defaults to 8. A
+# metric that can fill the biggest wave with distinguishable nodes is never
+# flagged, because its top-K never reaches the tied block.
+_DEGENERATE_MIN_DISTINGUISHED = 12
+
+# Only metrics a caller can actually ORDER BY are worth checking. Several
+# stored metrics are constant by construction -- every chunk has in_degree 1
+# (it belongs to one document), every bib_entry has out_degree 1 -- so
+# checking them all would bury the one signal that matters under permanent
+# noise. These are the metrics `corpus find --rank` / `corpus sample` and the
+# skill's seeding instructions actually consume.
+_RANKABLE_METRICS = {
+    "document": frozenset({"pagerank", "citation_count", "degree_centrality"}),
+    "author": frozenset({"h_index", "citation_count", "n_papers", "coauthor_count"}),
+}
+
+
+def degenerate_ranking_metrics(con) -> list[dict]:
+    """Ranking metrics whose values are almost entirely tied.
+
+    A corpus whose citation graph never resolved leaves every document on the
+    same baseline PageRank. Nothing errors — "top-K uncovered PageRank docs"
+    just becomes "first K docs alphabetically", so an off-topic paper can be
+    presented as the corpus's most central work. Surface it so the caller can
+    fall back to relevance-based ordering (or fix the upstream resolution).
+    """
+    wanted = sorted({m for metrics in _RANKABLE_METRICS.values() for m in metrics})
+    placeholders = ",".join("?" * len(wanted))
+    # ONE grouped scan, restricted to rankable metrics up front. An earlier
+    # form used a correlated subquery to find each group's max; with no usable
+    # index (the PK leads on graph_name) SQLite re-evaluated it per row, which
+    # made `corpus check` and every `run sense` take minutes on a real corpus.
+    # Grouping by graph_name too keeps metrics from different graph views off
+    # a shared scale, where a well-spread view would mask a degenerate one.
+    rows = con.execute(
+        f"SELECT graph_name, node_type, metric, ROUND(value, 9) AS v, "
+        f"COUNT(*) AS cnt FROM node_metrics WHERE metric IN ({placeholders}) "
+        f"GROUP BY graph_name, node_type, metric, v",
+        wanted,
+    ).fetchall()
+
+    by_group: dict[tuple[str, str, str], dict[float, int]] = {}
+    for graph_name, node_type, metric, value, cnt in rows:
+        if metric not in _RANKABLE_METRICS.get(node_type, frozenset()):
+            continue
+        by_group.setdefault((graph_name, node_type, metric), {})[value] = cnt
+
+    out: list[dict] = []
+    for (graph_name, node_type, metric), hist in by_group.items():
+        n = sum(hist.values())
+        if n < _DEGENERATE_MIN_NODES:
+            continue
+        # The MODE — the largest tied block, wherever it sits in the range.
+        block_value, block_size = max(hist.items(), key=lambda kv: (kv[1], kv[0]))
+        if block_size / n <= _DEGENERATE_TIED_SHARE:
+            continue
+        # Nodes that outrank the whole tied block. If a top-K can exhaust them
+        # and start drawing from the block, the tail of that K is alphabetical.
+        # This is the condition that distinguishes a degenerate ranking from a
+        # merely bottom-heavy one.
+        above = sum(c for v, c in hist.items() if v > block_value)
+        if above >= _DEGENERATE_MIN_DISTINGUISHED:
+            continue
+        out.append({
+            "graph_name": graph_name,
+            "node_type": node_type,
+            "metric": metric,
+            "n_nodes": n,
+            "n_distinct_values": len(hist),
+            "tied_share": round(block_size / n, 4),
+            "n_ranked_above_tie": above,
+        })
+    return sorted(out, key=lambda d: (d["node_type"], d["metric"], d["graph_name"]))
 
 
 def _available_metrics(con) -> dict:

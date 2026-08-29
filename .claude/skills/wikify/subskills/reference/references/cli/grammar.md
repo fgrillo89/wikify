@@ -78,8 +78,28 @@ artifact tables:
 ```text
 wikify data add <records.jsonl> --run <bundle> --corpus <corpus> [--keep-rejected]
 wikify data list | show | query | coverage --run <bundle>
+wikify data harvest-property --property <p> [--alias <a>] [--unit <u>] \
+    [--max-chunks N] [--include-text] --run <bundle> --corpus <corpus>
+wikify data reindex --run <bundle>
+wikify data relabel <claim_id> [--subject <s>] [--property <p>] --run <bundle>
 wikify data consolidate | commit | rebuild | list-artifacts --run <bundle>
 ```
+
+`data relabel` rewrites a claim's `subject` / `property` LABEL without
+touching its value, provenance, or verification status — use it to move a
+row heading from ASCII to inline LaTeX (`sigma_D` -> `$\sigma_D$`) instead
+of re-extracting the point or editing `claims.db` by hand. It preserves
+`claim_id` on purpose (that id is what `data_artifact_claims` and the
+committed `.dataspec.json` sidecars reference), and recomputes the derived
+`subject_norm` / `property_norm`.
+
+`data reindex` recomputes `subject_norm` / `property_norm` over every
+stored claim. Those columns are derived by `normalize_key` at write time,
+so claims written by an older revision of it keep the older spelling and
+every norm-keyed lookup silently misses them — an `ArtifactSpec.subjects`
+filter matching nothing, `data list --subject` returning empty. Run it when
+`data consolidate` fails with `subjects_filter_unmatched` on a spelling you
+can see in `data list`.
 
 `data add` is the verification gate: it reads a JSONL of staged points
 (each a `subject` / `property` / `value_text` / `doc_id` /

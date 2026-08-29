@@ -50,7 +50,7 @@ from ..bundle.work.evidence import (
     seen_chunk_ids,
 )
 from ..bundle.work.inbox import append_inbox, list_inbox_files
-from ..bundle.work.tend import tend_bundle
+from ..bundle.work.tend import GrowthEventNotRecordedError, tend_bundle
 from ..corpus.handles import HandleIndex as _HandleIndex
 from ._helpers import EXIT_LOCK_HELD, EXIT_VALIDATION, cli_error, cli_owner
 from ._io import _clean_slug_arg
@@ -271,6 +271,66 @@ def cmd_add_concept(
     typer.echo(f"created {slug}")
 
 
+def _emit_evidence_added(
+    bundle, concept: str, n: int, *, source: str, round_num: int | None = None
+) -> None:
+    """Record the growth event the maturity gate keys off.
+
+    This is NOT best-effort telemetry, and the direction of the failure is the
+    reason. On the ARTICLE path ``compute_maturity`` puts ``growth_stalled`` in
+    ``gates`` and bands a slug ``ready`` only when ALL gates are true — so
+    ``growth_stalled=True`` is a gate PASS. A missing ``evidence_added`` makes
+    ``_growth_stalled`` return True, which promotes an article slug that JUST
+    grew straight past its settle round. (The person path gates on quoted
+    contributions and doc count instead, so a lost event neither opens nor
+    closes its gate — but the ledger is still wrong.) Losing this event does not hold a
+    slug back; it lets it through, which is the failure this emitter exists to
+    prevent: a slug reading as permanently stalled and skipping its settle
+    round.
+
+    The append has already landed and cannot be undone, so the command exits
+    non-zero instead: a batch loop that checks exit status stops, and the
+    message carries the command that repairs the ledger.
+    """
+    if n <= 0:
+        return
+    try:
+        state = load_state(bundle)
+    except FileNotFoundError:
+        # No run initialised: no event ledger, no maturity gate to open.
+        return
+    try:
+        data: dict = {"n": n, "source": source}
+        if round_num is not None:
+            data["round"] = round_num
+        append_event(
+            bundle,
+            Event(
+                run_id=state.run_id,
+                type="evidence_added",
+                actor="cli",
+                concept_id=concept,
+                data=data,
+            ),
+        )
+    except Exception as exc:  # noqa: BLE001 - surfaced as a CLI error below
+        cli_error(
+            EXIT_VALIDATION,
+            error="growth_event_not_recorded",
+            concept=concept,
+            appended=n,
+            message=(
+                f"appended {n} evidence record(s) to {concept!r} but could NOT "
+                f"record the evidence_added event ({exc}). The growth-stall "
+                f"gate reads a missing event as 'stalled', which is a gate "
+                f"PASS - the slug would become writable this round without "
+                f"settling. Repair the ledger before continuing: `wikify run "
+                f"record-event --type evidence_added --concept-id {concept} "
+                f'--data \'{{"n": {n}}}\'`.'
+            ),
+        )
+
+
 @add_app.command("evidence")
 def cmd_add_evidence(
     concept: str = typer.Argument(...),
@@ -367,26 +427,9 @@ def cmd_add_evidence(
         return
 
     n = append_evidence(bundle, concept, parsed)
-
-    # Emit evidence_added event.
-    try:
-        state = load_state(bundle)
-        event_data: dict = {"n": n}
-        if round_num is not None:
-            event_data["round"] = round_num
-        append_event(
-            bundle,
-            Event(
-                run_id=state.run_id,
-                type="evidence_added",
-                actor="cli",
-                concept_id=concept,
-                data=event_data,
-            ),
-        )
-    except Exception:
-        # Event emission is best-effort; do not fail the write.
-        pass
+    _emit_evidence_added(
+        bundle, concept, n, source="add-evidence", round_num=round_num
+    )
 
     if fmt == "json":
         result: dict = {"ok": True, "appended": n}
@@ -578,7 +621,18 @@ def cmd_tend(
     ),
 ) -> None:
     bundle = _resolve_bundle(run)
-    summary = tend_bundle(bundle, keep_inbox=keep_inbox)
+    try:
+        summary = tend_bundle(bundle, keep_inbox=keep_inbox)
+    except GrowthEventNotRecordedError as exc:
+        # Same handling as the sibling emitter in `_emit_evidence_added`: a
+        # structured CLI error, not a raw traceback.
+        cli_error(
+            EXIT_VALIDATION,
+            error="growth_event_not_recorded",
+            concept=exc.slug,
+            appended=exc.n,
+            message=str(exc),
+        )
     if fmt == "json":
         typer.echo(json.dumps({"ok": True, **summary}))
         return
@@ -835,7 +889,9 @@ def cmd_build_evidence(
     <str>}``. Supplied quotes are verified to appear literally in the
     chunk's text; rejected as ``rejected_quote_not_in_chunk`` if not.
 
-    Writes ``work/concepts/<slug>/evidence.jsonl`` and prints stats.
+    Writes ``work/concepts/<slug>/evidence.jsonl`` and prints stats. Emits an
+    ``evidence_added`` event whenever it appends at least one record, so the
+    growth-stall maturity gate sees the growth without a separate call.
     """
     import contextlib
     import io
@@ -1088,35 +1144,57 @@ def cmd_build_evidence(
             "rejected_quote_then_whitespace_recovered": 0,
         }
         vetter_records: list[dict] = []
+        # Per-id rejection reasons. The aggregate counters say HOW MANY were
+        # dropped but not which id or why, so a promotion that bounced off the
+        # excluded-kind blacklist is indistinguishable from a chunk that does
+        # not exist -- the caller re-searches for content that is right there
+        # in a caption/references chunk it is simply not allowed to cite.
+        rejections: list[dict] = []
+
+        def _reject(reason: str, cid: str, **extra) -> None:
+            vetter_stats[reason] += 1
+            rejections.append({"chunk_id": cid, "reason": reason, **extra})
+
         for entry in ordered_entries:
             raw_cid = entry["chunk_id"]
             cid, resolve_err = resolve_chunk_handle(raw_cid)
             if resolve_err is not None:
-                vetter_stats["rejected_not_found"] += 1
+                _reject("rejected_not_found", raw_cid, message=resolve_err)
                 continue
             if cid in committed:
-                vetter_stats["rejected_already_committed"] += 1
+                _reject("rejected_already_committed", cid)
                 continue
             row = fetch_chunk(cid)
             if row is None:
-                vetter_stats["rejected_not_found"] += 1
+                _reject("rejected_not_found", cid)
                 continue
             if row["is_boilerplate"]:
-                vetter_stats["rejected_boilerplate"] += 1
+                _reject("rejected_boilerplate", cid)
                 continue
             section_type = (row["section_type"] or "").lower()
             if section_type in _FROM_IDS_EXCLUDED_KINDS:
-                vetter_stats["rejected_excluded_kind"] += 1
+                _reject(
+                    "rejected_excluded_kind", cid,
+                    section_type=section_type,
+                    message=(
+                        f"the target content is in a {section_type!r} chunk, "
+                        "which is excluded from citation by design (plot-OCR "
+                        "text, reference dumps, acknowledgments). The chunk "
+                        "EXISTS -- do not re-search for it. Either cite a body "
+                        "chunk that states the same fact, or record the gap as "
+                        "an editor_ruling."
+                    ),
+                )
                 continue
             text = (row["text"] or "").strip()
             if len(text) < min_chunk_chars:
-                vetter_stats["rejected_short"] += 1
+                _reject("rejected_short", cid, n_chars=len(text))
                 continue
             if _matches_never_cite(text):
-                vetter_stats["rejected_never_cite"] += 1
+                _reject("rejected_never_cite", cid)
                 continue
             if _publisher_frontmatter(text):
-                vetter_stats["rejected_frontmatter"] += 1
+                _reject("rejected_frontmatter", cid)
                 continue
             raw_text = row["text"] or ""
             supplied_quote = entry.get("quote")
@@ -1137,7 +1215,7 @@ def cmd_build_evidence(
                         vetter_stats["rejected_quote_then_whitespace_recovered"] += 1
                         quote = supplied_quote  # keep writer's spelling
                     else:
-                        vetter_stats["rejected_quote_not_in_chunk"] += 1
+                        _reject("rejected_quote_not_in_chunk", cid)
                         continue
             else:
                 quote = text[:400]
@@ -1157,7 +1235,12 @@ def cmd_build_evidence(
             if fmt == "json":
                 typer.echo(
                     json.dumps(
-                        {"ok": False, "error": "no_evidence", "stats": vetter_stats}
+                        {
+                            "ok": False,
+                            "error": "no_evidence",
+                            "stats": vetter_stats,
+                            "rejections": rejections,
+                        }
                     )
                 )
             else:
@@ -1165,9 +1248,15 @@ def cmd_build_evidence(
                     f"{concept}: no evidence appended from --from-ids  "
                     f"stats={vetter_stats}"
                 )
+                for r in rejections:
+                    typer.echo(
+                        f"  rejected {r['chunk_id']}: {r.get('message') or r['reason']}",
+                        err=True,
+                    )
             raise typer.Exit(code=EXIT_VALIDATION)
         parsed = [EvidenceRecord.model_validate(r) for r in vetter_records]
         n = append_evidence(bundle, concept, parsed)
+        _emit_evidence_added(bundle, concept, n, source="build-evidence")
         vetter_stats["appended"] = n
         distinct_docs = len({r["doc_id"] for r in vetter_records})
         if fmt == "json":
@@ -1179,6 +1268,7 @@ def cmd_build_evidence(
                         "appended": n,
                         "distinct_docs": distinct_docs,
                         "stats": vetter_stats,
+                        "rejections": rejections,
                     }
                 )
             )
@@ -1431,6 +1521,7 @@ def cmd_build_evidence(
 
     parsed = [EvidenceRecord.model_validate(r) for r in records]
     n = append_evidence(bundle, concept, parsed)
+    _emit_evidence_added(bundle, concept, n, source="build-evidence")
     distinct_docs = len({r["doc_id"] for r in records})
     if fmt == "json":
         typer.echo(
@@ -1991,6 +2082,23 @@ _PROXIMITY_WEIGHT = 0.15
 _COCITATION_MIN_NEIGHBOURS = 2
 _COCITATION_CAP = 12
 
+# Minimum share of candidate docs that must carry a parseable year before the
+# publication-era criterion is ENFORCED. Below it the buckets are computed over
+# too small a dated slice to say anything about breadth: with 2 dated docs out
+# of 30, "the early era is unrepresented" describes the metadata, not the page.
+#
+# This is a NOISE threshold, not an impossibility one: bucket totals count only
+# DATED candidates, so an empty bucket is clearable by citing a dated candidate
+# in it and `missing_docs` lists them. The criterion is skipped because acting
+# on it below the floor chases an artifact of missing metadata, not because the
+# caller could not act; the real fix is to backfill `documents.year`.
+#
+# 0.6 is a judgement call, not a derived value: it is high enough that the
+# buckets rest on a majority of the candidates and low enough that a corpus
+# with ordinary metadata gaps still gets the criterion. Corpora of arXiv/SSRN
+# PDFs with no DOI coverage land far below it.
+YEAR_COVERAGE_MIN = 0.6
+
 
 def _cocitation_candidates(
     corpus, represented_docs: list[str], exclude_ids: set[str],
@@ -2313,6 +2421,17 @@ def cmd_concept_recall(
         b for b, v in year_buckets.items()
         if v["total"] > 0 and v["represented"] == 0
     ]
+    # The era criterion is only meaningful when most candidates HAVE a year.
+    # With `documents.year` null across the corpus the buckets rest on the
+    # handful of dated docs, so an empty bucket describes the metadata rather
+    # than the page's breadth. Below the coverage floor the criterion is
+    # reported but not enforced, and the payload says which it was
+    # (`year_gate_applied`). See YEAR_COVERAGE_MIN for why this is a noise
+    # threshold and not an impossibility one.
+    year_coverage = (
+        round(len(years) / len(candidate_docs), 4) if candidate_docs else 0.0
+    )
+    year_gate_applied = year_coverage >= YEAR_COVERAGE_MIN
 
     min_represented = min(8, math.ceil(0.6 * len(candidate_docs)))
     # Recall is measured against the CANDIDATE set: how many of the
@@ -2324,7 +2443,7 @@ def cmd_concept_recall(
     )
     recall_ok = (
         n_candidates_covered >= min_represented
-        and not empty_buckets
+        and not (empty_buckets and year_gate_applied)
         and max_doc_share <= 0.35
     )
 
@@ -2334,6 +2453,8 @@ def cmd_concept_recall(
         "missing_docs": missing_docs,
         "year_buckets": year_buckets,
         "empty_buckets": empty_buckets,
+        "year_coverage": year_coverage,
+        "year_gate_applied": year_gate_applied,
         "section_types_represented": section_types_represented,
         "max_doc_share": round(max_doc_share, 4),
         "min_represented": min_represented,
@@ -2344,13 +2465,18 @@ def cmd_concept_recall(
     if fmt == "json":
         typer.echo(json.dumps({"ok": True, "slug": concept, "recall": recall}))
         return
+    era_note = (
+        ""
+        if year_gate_applied
+        else f" (era gate SKIPPED: only {year_coverage:.0%} of candidates dated)"
+    )
     typer.echo(
         f"{concept}: recall_ok={recall_ok}  "
         f"candidates_covered={n_candidates_covered}/{len(candidate_docs)} "
         f"(min {min_represented})  represented={len(represented_docs)}  "
         f"missing={len(missing_docs)}  "
         f"max_doc_share={max_doc_share:.2f}  "
-        f"empty_buckets={','.join(empty_buckets) or '-'}  "
+        f"empty_buckets={','.join(empty_buckets) or '-'}{era_note}  "
         f"section_types={','.join(section_types_represented) or '-'}"
     )
 

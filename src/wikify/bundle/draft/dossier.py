@@ -149,6 +149,15 @@ def render_dossier(draft: WriteRequest) -> str:
     # Marker index
     out.append("## Marker index")
     out.append("")
+    out.append(
+        "`[^eN]` resolves POSITIONALLY to the Nth (1-based) entry of "
+        "`draft.json`'s evidence array — the rows below, in order. Take each "
+        "chunk's marker from this table and do NOT renumber: a marker chosen "
+        "freely cites the wrong paper even when its quote verifies, and "
+        "`wikify draft check` rejects it as `marker_evidence_mismatch`. The "
+        "`[^eN]:` definition must name that row's chunk id."
+    )
+    out.append("")
     out.append("| Marker | Doc | Section | Chunk |")
     out.append("|---|---|---|---|")
     for marker, ref in by_marker.items():
@@ -291,6 +300,19 @@ def render_dossier(draft: WriteRequest) -> str:
                 # top-of-dossier "## Figure candidates" table already lists
                 # every figure with its near-marker mapping, so repeating
                 # the captions here only triples the token spend.
+                if ref.context_window_assets:
+                    kinds = "/".join(ref.context_window_assets)
+                    out.append(
+                        f"> **NOT CITABLE — promote first.** The adjacent "
+                        f"context below carries a {kinds} this chunk only "
+                        f"refers to. You may READ it, but you may NOT quote "
+                        f"it; only `{_short_chunk(ref.chunk_id)}` is citable "
+                        f"under [{marker}]. If the page needs that "
+                        f"{kinds}, report it as a workflow signal naming "
+                        f"{', '.join(_short_chunk(c) for c in ref.promotable_chunk_ids)}"
+                        f" so that chunk is promoted to evidence."
+                    )
+                    out.append("")
                 if ref.context_window:
                     out.append(
                         "<details><summary>Adjacent chunks "

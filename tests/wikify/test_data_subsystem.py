@@ -45,7 +45,7 @@ def test_parse_leading_number_variants() -> None:
 
 
 def test_parse_leading_number_bare_integers_not_truncated() -> None:
-    """Regression: bare integers >= 1000 must not collapse to their first
+    """Regression: Bare integers >= 1000 must not collapse to their first
     three digits (the thousands-group regex previously matched "100" out of
     "1000" and silently rejected clean endurance/retention values)."""
     assert parse_leading_number("1000") == 1000.0
@@ -194,6 +194,117 @@ def test_parse_leading_number_handles_spaced_thousands() -> None:
     assert rng.verification_status == "verified"
 
 
+def test_parse_leading_number_handles_spaced_decimal_point() -> None:
+    """Regression: PDF math extraction spaces the decimal point away from its
+    digits ("0 . 549"), which the bare number regex reads as two unrelated
+    integers and parses as 0.0."""
+    from wikify.data.models import collapse_number_spacing, parse_leading_number
+
+    assert collapse_number_spacing("0 . 549") == "0.549"
+    assert collapse_number_spacing("10 000 . 5 s") == "10000.5 s"
+    assert parse_leading_number("0 . 549") == 0.549
+    assert parse_leading_number("79 . 13 bp") == 79.13
+    # A clean decimal is untouched, and a lone period is not a decimal point.
+    assert parse_leading_number("0.549") == 0.549
+    assert collapse_number_spacing("ends here. 12 follows") == "ends here. 12 follows"
+
+
+def test_sentence_boundary_between_numbers_is_not_a_decimal_point() -> None:
+    """A sentence that ENDS on a number and whose next sentence STARTS on one
+    ("...runs to 2005. 12 of the 30 stocks...") must not collapse into a single
+    "2005.12" token. Doing so destroys both numbers, so a claim whose quote is
+    verbatim and whose value is right fails the verification gate."""
+    from wikify.data.verify import _numbers
+
+    # Collapsing is one READING, not a correction: `_numbers` scans the source
+    # both as written and collapsed and unions the results, so the ambiguous
+    # spacing can only ever ADD a key. Both the sentence-boundary integers and
+    # the (spurious) decimal reading survive.
+    for prose in (
+        "Our sample runs to 2005. 12 of the 30 stocks were excluded",
+        "Our sample runs to 2005 . 12 of the 30 stocks were excluded",
+    ):
+        keys = _numbers(prose)
+        assert {"2005", "12", "30"} <= keys, prose
+        # ...and the joined reading is NOT offered: admitting it would let a
+        # fabricated "2005.12" verify against this sentence.
+        assert "2005.12" not in keys, prose
+        assert repr(2005.12) not in keys, prose
+
+        p = DataPoint(
+            subject="sample", property="excluded stocks", value_text="12",
+            doc_id="d1", chunk_id="c1",
+            grounding_quote=prose[len("Our sample runs to "):],
+        )
+        verify_point(p, chunk_text=prose + " because of thin trading.")
+        assert p.verification_status == "verified", prose
+
+    # ...and a genuinely spaced decimal still normalises, in both spacings.
+    from wikify.data.models import parse_leading_number
+
+    assert parse_leading_number("0 . 549") == 0.549
+    assert parse_leading_number("0. 549") == 0.549
+
+
+def test_parse_leading_number_bare_fraction() -> None:
+    """Regression: ``parse_leading_number("1/2")`` stopped at the slash and
+    returned 1.0, storing a ``value_num`` an order of magnitude off the
+    displayed value AND spuriously verifying against any stray "1"."""
+    from wikify.data.models import parse_leading_number
+
+    assert parse_leading_number("1/2") == 0.5
+    assert parse_leading_number("-3 / 4") == -0.75
+    assert parse_leading_number("−1/2") == -0.5  # unicode minus
+    assert parse_leading_number("1/0") is None
+    # Only a BARE fraction is reinterpreted; a fraction with a unit keeps the
+    # leading-number reading (the slash there is a per-unit separator).
+    assert parse_leading_number("1/2 of the spread") == 1.0
+
+
+def test_data_point_stores_bare_fraction_value() -> None:
+    p = DataPoint(
+        subject="permanent share", property="fraction", value_text="1/2",
+        doc_id="d", chunk_id="c", grounding_quote="a permanent share of 1/2",
+    ).finalize()
+    assert p.value_num == 0.5
+
+
+def test_verify_point_accepts_spaced_decimal_in_source() -> None:
+    """A perfectly verbatim quote must verify even when PDF extraction spaced
+    the decimal point out on both sides ("0 . 549")."""
+    source = "the fitted exponent is 0 . 549 for the pooled sample"
+    p = DataPoint(
+        subject="beta", property="exponent", value_text="0.549",
+        doc_id="d", chunk_id="c",
+        grounding_quote="the fitted exponent is 0 . 549",
+    )
+    verify_point(p, chunk_text=source)
+    assert p.verification_status == "verified"
+
+    # A clean rendering of the same value still verifies.
+    clean = DataPoint(
+        subject="beta", property="exponent", value_text="0.549",
+        doc_id="d", chunk_id="c", grounding_quote="the fitted exponent is 0.549",
+    )
+    verify_point(clean, chunk_text="the fitted exponent is 0.549 for the sample")
+    assert clean.verification_status == "verified"
+
+    # A wrong number is still rejected — the normalization does not loosen the
+    # numeric comparison itself.
+    wrong = DataPoint(
+        subject="beta", property="exponent", value_text="0.649",
+        doc_id="d", chunk_id="c",
+        grounding_quote="the fitted exponent is 0 . 549",
+    )
+    verify_point(wrong, chunk_text=source)
+    assert wrong.verification_status == "rejected"
+
+    # And OCR-mangled scalars stay flagged (the spacing fix must not rescue them).
+    from wikify.data.verify import is_ocr_mangled_scalar
+
+    assert is_ocr_mangled_scalar("1 10 5 ohm cm")
+
+
 def test_number_supported_float_normalization() -> None:
     assert number_supported("1.10 A", "GPC was 1.1 A", "GPC was 1.1 A reported")
     assert not number_supported("9.9 A", "GPC was 1.1 A", "GPC was 1.1 A")
@@ -210,7 +321,7 @@ def test_number_supported_scientific_notation() -> None:
 
 
 def test_number_supported_bare_integer_thousands() -> None:
-    """Regression: an endurance of 1000 cycles verifies against '1000' in
+    """Regression: An endurance of 1000 cycles verifies against '1000' in
     the source (the integer-truncation bug would have rejected it)."""
     assert number_supported("1000 cycles", "endurance of 1000 cycles", "1000 cycles")
 
@@ -304,6 +415,58 @@ def test_store_list_filters(tmp_path: Path) -> None:
     rows = store.list_points(subject="Al2O3")
     assert len(rows) == 1 and rows[0]["subject"] == "Al2O3"
     assert len(store.list_points(property="GPC")) == 2
+
+
+def test_every_stored_row_has_a_current_subject_norm(tmp_path: Path) -> None:
+    """``subject_norm`` is derived by ``normalize_key`` at write time, so a
+    row written by an older revision keeps the older spelling and every
+    norm-keyed lookup misses it. Assert the invariant over all stored rows, and
+    that ``reindex`` restores it for rows that drifted."""
+    store = DataStore(tmp_path / "claims.db")
+    store.add_points([
+        _verified("Square-Root Law", "beta", "0.5", "", "d1", "c1", "q"),
+        _verified("Kyle's lambda", "slope", "1.2", "", "d2", "c2", "q"),
+    ])
+    rows = store.list_points()
+    assert rows
+    for r in rows:
+        assert r["subject_norm"] == normalize_key(r["subject"])
+        assert r["property_norm"] == normalize_key(r["property"])
+
+    # Simulate the stale keys an older normalize_key left behind.
+    store.con.execute(
+        "UPDATE data_points SET subject_norm = 'square-root-law' "
+        "WHERE subject = 'Square-Root Law'"
+    )
+    store.con.commit()
+    assert store.list_points(subject="Square-Root Law") == []
+
+    result = store.reindex_norm_keys()
+    assert result["subject_norm_updated"] == 1
+    assert result["scanned"] == 2
+    for r in store.list_points():
+        assert r["subject_norm"] == normalize_key(r["subject"])
+        assert r["property_norm"] == normalize_key(r["property"])
+    assert len(store.list_points(subject="Square-Root Law")) == 1
+    # Idempotent: a second pass changes nothing.
+    assert store.reindex_norm_keys()["subject_norm_updated"] == 0
+
+
+def test_relabel_point_rewrites_label_without_touching_value(tmp_path: Path) -> None:
+    """Relabelling a claim's subject (ASCII -> inline LaTeX) must not
+    require re-extracting the value, and must keep the claim's row identity so
+    artifact claim links survive."""
+    store = DataStore(tmp_path / "claims.db")
+    p = _verified("sigma_D", "value", "0.42", "", "d1", "c1", "sigma_D was 0.42")
+    store.add_points([p])
+    out = store.relabel_point(p.claim_id, subject="$\\sigma_D$")
+    assert out["subject"] == "$\\sigma_D$"
+    assert out["subject_norm"] == normalize_key("$\\sigma_D$")
+    row = store.get_point(p.claim_id)
+    assert row["claim_id"] == p.claim_id  # identity preserved for artifact links
+    assert row["value_text"] == "0.42"
+    assert row["verification_status"] == "verified"
+    assert row["grounding_quote"] == "sigma_D was 0.42"
 
 
 # --------------------------------------------------------------------------
@@ -412,6 +575,85 @@ def test_consolidate_honors_spec_subject_order(tmp_path: Path) -> None:
     assert [r["subject"] for r in table.rows] == ["TiO2", "Al2O3", "HfO2"]
 
 
+def test_consolidate_errors_when_subject_filter_matches_nothing(tmp_path: Path) -> None:
+    """A spec ``subjects`` filter that matches no stored claim produced a
+    0-row table with no error, which reads downstream as "no data" and forces
+    an unordered fallback. It must raise instead."""
+    import pytest
+
+    from wikify.data.consolidate import SubjectFilterUnmatchedError
+
+    store = DataStore(tmp_path / "claims.db")
+    store.add_points([
+        _verified("Square-Root Law", "beta", "0.5", "", "d1", "c1", "q"),
+    ])
+    # The stale un-normalised key an older ``normalize_key`` stored. The spec
+    # spelling is right; the stored column is what no longer matches.
+    store.con.execute("UPDATE data_points SET subject_norm = 'square-root-law'")
+    store.con.commit()
+
+    spec = ArtifactSpec(
+        artifact_id="beta", title="Beta", properties=["beta"],
+        subjects=["Square-Root Law"],
+    )
+    with pytest.raises(SubjectFilterUnmatchedError) as exc:
+        consolidate(store, spec)
+    assert "Square-Root Law" in str(exc.value)
+    assert "square-root-law" in str(exc.value)  # names the stored keys to compare
+
+    # After a reindex the same spec consolidates, and an unfiltered spec was
+    # never affected (an empty subjects list means "all subjects").
+    store.reindex_norm_keys()
+    assert consolidate(store, spec).n_rows == 1
+    assert consolidate(
+        store, ArtifactSpec(artifact_id="b2", title="B", properties=["beta"])
+    ).n_rows == 1
+
+
+def test_consolidate_allows_legitimate_not_yet_harvested_states(tmp_path: Path) -> None:
+    """The subjects gate must fire ONLY when the subject resolves to no stored
+    claim at all. An empty result also means "this subject's property has not
+    been harvested yet" or "its claims are below min_verification" — both are
+    legitimate not-yet states that must still render, or a routine `data
+    rebuild` starts aborting on artifacts that were merely waiting for data."""
+    import pytest
+
+    from wikify.data.consolidate import SubjectFilterUnmatchedError
+
+    store = DataStore(tmp_path / "claims.db")
+    verified = _verified("Square-Root Law", "beta", "0.5", "", "d1", "c1", "q")
+    unverified = DataPoint(
+        subject="Almgren model", property="beta", value_text="0.6",
+        doc_id="d2", chunk_id="c2", grounding_quote="q",
+    ).finalize()
+    store.add_points([verified, unverified])
+
+    # (a) subject exists, property not harvested yet -> empty table, no raise.
+    table = consolidate(store, ArtifactSpec(
+        artifact_id="a", title="A", properties=["decay half-life"],
+        subjects=["Square-Root Law"],
+    ))
+    assert table.n_rows == 0
+    assert table.empty_columns == ["decay half-life"]
+
+    # (b) subject + property exist but every claim is below min_verification.
+    table = consolidate(store, ArtifactSpec(
+        artifact_id="b", title="B", properties=["beta"],
+        subjects=["Almgren model"],
+    ))
+    assert table.n_rows == 0
+
+    # (c) a subject the store has never heard of IS an authoring error.
+    with pytest.raises(SubjectFilterUnmatchedError) as exc:
+        consolidate(store, ArtifactSpec(
+            artifact_id="c", title="C", properties=["beta"],
+            subjects=["Squareroot law"],
+        ))
+    # Both sides are reported as NORMALIZED keys — printing the spec's raw
+    # spelling beside normalized stored keys made a match look like a mismatch.
+    assert "squareroot law" in str(exc.value)
+
+
 def test_consolidate_respects_min_verification(tmp_path: Path) -> None:
     store = DataStore(tmp_path / "claims.db")
     p_unver = DataPoint(
@@ -456,6 +698,37 @@ def test_render_artifact_markdown_structure(tmp_path: Path) -> None:
     assert "[^d1]" in md
     assert "## References" in md
     assert '[^d1]: doc1 > "GPC was 1.1"' in md
+
+
+def test_angle_bracket_subject_survives_to_rendered_page(tmp_path: Path) -> None:
+    """A subject containing ASCII ``<c>`` (for the bracket average ⟨c⟩) was
+    parsed as inline HTML, so the browser silently DELETED the symbol and the
+    row read "Average coefficient  in peak impact". It must survive both the
+    markdown emitter and the markdown->HTML conversion."""
+    import markdown
+
+    from wikify.render.html.render import _MD_EXTENSION_CONFIGS, _MD_EXTENSIONS
+
+    store = DataStore(tmp_path / "claims.db")
+    store.add_points([
+        _verified(
+            "Average square-root-law coefficient <c> in peak impact",
+            "value", "0.5", "", "doc1", "c1", "coefficient of 0.5",
+        ),
+    ])
+    spec = ArtifactSpec(
+        artifact_id="coef", title="Impact Coefficients", properties=["value"],
+        description="Fitted <c> across studies.",
+    )
+    md_body = render_artifact_markdown(consolidate(store, spec))
+    assert "&lt;c&gt;" in md_body
+    assert "<c>" not in md_body
+
+    html = markdown.Markdown(
+        extensions=_MD_EXTENSIONS, extension_configs=_MD_EXTENSION_CONFIGS
+    ).convert(md_body)
+    assert "Average square-root-law coefficient &lt;c&gt; in peak impact" in html
+    assert "Fitted &lt;c&gt; across studies." in html
 
 
 def test_register_artifact_wiki_page_inserts_data_row(tmp_path: Path) -> None:
@@ -864,7 +1137,7 @@ def test_data_artifact_traverses_to_evidence(tmp_path: Path) -> None:
 
 
 def test_wiki_rebuild_data_row_does_not_advance_past_committed(tmp_path: Path) -> None:
-    """wiki rebuild is a projection of COMMITTED disk state: a claim added after
+    """Wiki rebuild is a projection of COMMITTED disk state: a claim added after
     the artifact was committed (but before `data rebuild`) must NOT appear in
     the wiki.db row, or DB search/traverse would expose rows absent from the
     committed markdown page."""
@@ -1232,7 +1505,7 @@ def test_collision_check_sees_disk_article_without_db_row(tmp_path: Path) -> Non
 
 
 def test_navigation_export_skips_gracefully_under_run_lock(tmp_path: Path) -> None:
-    """navigation's wiki.db rebuild is serialized under the run lock; if the
+    """Navigation's wiki.db rebuild is serialized under the run lock; if the
     bundle is locked it skips the DB export gracefully (file-only), never
     crashing or racing."""
     from wikify.api import Bundle
@@ -1950,3 +2223,542 @@ def test_data_recall_gate_reads_live_verified_docs(tmp_path: Path) -> None:
     )
     with pytest.raises((SystemExit, typer.Exit, typer.BadParameter)):
         _enforce_data_recall(store, spec2, skip_recall=False)
+
+
+def test_verify_gate_accepts_a_bare_fraction_claim() -> None:
+    """A fraction is how a paper states an exponent ("we set the exponent to
+    1/2"). `parse_leading_number` reads it as its quotient, so the SOURCE side
+    must offer the same key — otherwise teaching the parser about fractions
+    turns a wrong-but-stored value into an outright rejected one."""
+    src = "We set the exponent to 1/2 in the square-root law of market impact."
+
+    as_fraction = DataPoint(
+        subject="square root law", property="exponent", value_text="1/2",
+        doc_id="d", chunk_id="c", grounding_quote="We set the exponent to 1/2",
+    ).finalize()
+    verify_point(as_fraction, chunk_text=src)
+    assert as_fraction.verification_status == "verified"
+    assert as_fraction.value_num == 0.5
+
+    # A clean decimal alongside the printed form verifies — that is the
+    # documented extraction contract ("keep the number exactly as printed in
+    # value_original").
+    keeps_original = DataPoint(
+        subject="square root law", property="exponent", value_text="0.5",
+        value_original="1/2", doc_id="d", chunk_id="c",
+        grounding_quote="We set the exponent to 1/2",
+    ).finalize()
+    verify_point(keeps_original, chunk_text=src)
+    assert keeps_original.verification_status == "verified"
+
+    # ...but a bare 0.5 with the original DISCARDED must NOT verify against the
+    # fraction. The quotient reading is offered only when the value itself is a
+    # bare fraction; widening it to every `a/b` in the text would let a claim of
+    # 0.5 verify against an unrelated ratio like "10/20 completed trials".
+    discards_original = DataPoint(
+        subject="square root law", property="exponent", value_text="0.5",
+        doc_id="d", chunk_id="c", grounding_quote="We set the exponent to 1/2",
+    ).finalize()
+    verify_point(discards_original, chunk_text=src)
+    assert discards_original.verification_status == "rejected"
+
+    unrelated_ratio = DataPoint(
+        subject="trials", property="share", value_text="0.5",
+        doc_id="d", chunk_id="c", grounding_quote="reports 10/20 completed trials",
+    ).finalize()
+    verify_point(unrelated_ratio, chunk_text="Table 3 reports 10/20 completed trials.")
+    assert unrelated_ratio.verification_status == "rejected"
+
+    # A wrong value is still rejected — the extra key does not loosen the gate.
+    wrong = DataPoint(
+        subject="square root law", property="exponent", value_text="0.9",
+        doc_id="d", chunk_id="c", grounding_quote="We set the exponent to 1/2",
+    ).finalize()
+    verify_point(wrong, chunk_text=src)
+    assert wrong.verification_status == "rejected"
+
+
+def test_consolidate_reports_missing_subjects_without_blanking_the_table() -> None:
+    """A spec lists many subjects; the realistic error is a typo in one of
+    them. Raising only when EVERY subject misses would let the rest silently
+    produce no rows — the same silent-narrowing the gate exists to prevent,
+    just at row granularity."""
+    import tempfile
+
+    store = DataStore(Path(tempfile.mkdtemp()) / "claims.db")
+    store.add_points([
+        _verified("Square-Root Law", "beta", "0.5", "", "d1", "c1", "q"),
+    ])
+    table = consolidate(store, ArtifactSpec(
+        artifact_id="a", title="A", properties=["beta"],
+        subjects=["Square-Root Law", "Almgren Model", "Kyle Lambda"],
+    ))
+    assert table.n_rows == 1  # the good subject still renders
+    assert table.missing_subjects == ["Almgren Model", "Kyle Lambda"]
+
+
+def test_rebuild_refuses_to_narrow_a_committed_page(tmp_path: Path) -> None:
+    """`data rebuild` is unattended and walks EVERY committed artifact. A spec
+    subject that stops resolving (a relabel, a reindex, a normalize_key
+    revision) would otherwise rewrite the committed page with those rows
+    deleted and still report ok:true — the most destructive shape of the
+    silent-narrowing the subjects gate exists to prevent."""
+    from wikify.bundle.run.lifecycle import init_run
+
+    bundle_dir = tmp_path / "bundle"
+    (bundle_dir / "run").mkdir(parents=True)
+    bundle = Bundle(root=bundle_dir)
+    init_run(bundle, corpus_path="data/corpora/foo")
+
+    store = DataStore.open(bundle.root)
+    store.add_points([
+        _verified("Alpha", "beta", "0.5", "", "d1", "c1", "q"),
+        _verified("Gamma", "beta", "0.7", "", "d2", "c2", "q"),
+    ])
+    spec = ArtifactSpec(
+        artifact_id="a", title="Betas", properties=["beta"],
+        subjects=["Alpha", "Gamma"],
+    )
+    store.upsert_artifact(spec, n_rows=2)
+    store.set_artifact_status("a", "committed")
+    assert consolidate(store, spec).n_rows == 2
+    # One subject stops resolving.
+    store.con.execute(
+        "UPDATE data_points SET subject_norm = 'stale-key' WHERE subject = 'Gamma'"
+    )
+    store.con.commit()
+    store.close()
+
+    result = runner.invoke(app, ["data", "rebuild", "--run", str(bundle_dir),
+                                 "--format", "json"])
+    # Non-zero: the sweep finished without a half-applied mutation, but a
+    # committed page was left stale. A clean rebuild and a rebuild that
+    # published nothing must not share an exit code.
+    assert result.exit_code != 0, result.output
+    payload = json.loads(result.output)
+    assert payload["ok"] is False
+    assert payload["rebuilt"] == []  # nothing overwritten
+    assert len(payload["skipped"]) == 1
+    assert payload["skipped"][0]["error"] == "subjects_filter_partially_unmatched"
+    assert payload["skipped"][0]["missing_subjects"] == ["Gamma"]
+
+
+def test_relabel_refuses_to_orphan_a_committed_artifact(tmp_path: Path) -> None:
+    """A relabel rewrites `subject_norm`, which is the key a committed spec's
+    `subjects` filter matches on — so the row silently vanishes from an
+    already-published page on its next rebuild. Preserving `claim_id` does not
+    protect against that, because consolidate resolves rows by norm, not by id."""
+    from wikify.bundle.run.lifecycle import init_run
+
+    bundle_dir = tmp_path / "bundle"
+    (bundle_dir / "run").mkdir(parents=True)
+    bundle = Bundle(root=bundle_dir)
+    init_run(bundle, corpus_path="data/corpora/foo")
+
+    store = DataStore.open(bundle.root)
+    p = _verified("sigma_D", "beta", "0.5", "", "d1", "c1", "q")
+    store.add_points([p])
+    spec = ArtifactSpec(
+        artifact_id="a", title="Betas", properties=["beta"], subjects=["sigma_D"],
+    )
+    store.upsert_artifact(spec, n_rows=1)
+    store.set_artifact_status("a", "committed")
+    store.close()
+
+    blocked = runner.invoke(app, [
+        "data", "relabel", p.claim_id, "--run", str(bundle_dir),
+        "--subject", "$\\sigma_D$", "--format", "json",
+    ])
+    assert blocked.exit_code != 0
+    assert "committed_artifact_filters_on_label" in blocked.output
+    assert "a" in blocked.output
+
+    # The PROPERTY axis is guarded too, and is the likelier way to orphan a
+    # row: consolidate resolves COLUMNS by property_norm, `spec.properties` is
+    # mandatory where `subjects` is optional, and the documented motivating
+    # rename (`sigma_D` -> `$\sigma_D$`) is property-shaped.
+    by_property = runner.invoke(app, [
+        "data", "relabel", p.claim_id, "--run", str(bundle_dir),
+        "--property", "$\\beta$", "--format", "json",
+    ])
+    assert by_property.exit_code != 0
+    assert "committed_artifact_filters_on_label" in by_property.output
+    assert "properties" in by_property.output
+
+    forced = runner.invoke(app, [
+        "data", "relabel", p.claim_id, "--run", str(bundle_dir),
+        "--subject", "$\\sigma_D$", "--force", "--format", "json",
+    ])
+    assert forced.exit_code == 0, forced.output
+    # --force still tells the caller which specs now need updating.
+    assert json.loads(forced.output)["artifacts_needing_spec_update"][0][
+        "artifact_id"
+    ] == "a"
+
+
+def test_add_points_dedups_on_content_not_just_claim_id(tmp_path: Path) -> None:
+    """`relabel_point` keeps `claim_id` while rewriting the label, so the id no
+    longer reproduces from the row's own content. Matching duplicates on the id
+    alone would then let a re-extraction of the SAME fact insert a second row,
+    inflating `n_points` and making a table conflict with itself from one chunk."""
+    store = DataStore(tmp_path / "claims.db")
+    p = _verified("sigma_D", "value", "0.42", "", "d1", "c1", "sigma_D was 0.42")
+    assert store.add_points([p])["added"] == 1
+    store.relabel_point(p.claim_id, subject="$\\sigma_D$")
+
+    # Same fact, re-extracted under the canonical label: a different content
+    # hash, but the same underlying assertion.
+    again = _verified(
+        "$\\sigma_D$", "value", "0.42", "", "d1", "c1", "sigma_D was 0.42"
+    )
+    assert again.claim_id != p.claim_id
+    result = store.add_points([again])
+    assert result == {"added": 0, "duplicate": 1, "claim_ids": []}
+    assert len(store.list_points()) == 1
+
+    # A genuinely different fact from the same chunk is NOT swallowed.
+    other = _verified(
+        "$\\sigma_D$", "value", "0.99", "", "d1", "c1", "sigma_D was 0.99"
+    )
+    assert store.add_points([other])["added"] == 1
+    assert len(store.list_points()) == 2
+
+
+def test_data_commit_refuses_to_publish_a_narrowed_page(tmp_path: Path) -> None:
+    """`data commit <artifact_id>` is the documented second half of the two-step
+    publish flow, so it must apply the same gate as `consolidate --commit` and
+    `rebuild`. Guarding only its siblings leaves the sanctioned path able to
+    publish exactly the narrowed table the others refuse."""
+    from wikify.bundle.run.lifecycle import init_run
+
+    bundle_dir = tmp_path / "bundle"
+    (bundle_dir / "run").mkdir(parents=True)
+    bundle = Bundle(root=bundle_dir)
+    init_run(bundle, corpus_path="data/corpora/foo")
+
+    store = DataStore.open(bundle.root)
+    store.add_points([
+        _verified("Alpha", "beta", "0.5", "", "d1", "c1", "q"),
+        _verified("Gamma", "beta", "0.7", "", "d2", "c2", "q"),
+    ])
+    spec = ArtifactSpec(
+        artifact_id="a", title="Betas", properties=["beta"],
+        subjects=["Alpha", "Gamma"],
+    )
+    store.upsert_artifact(spec, n_rows=2)
+    store.set_artifact_status("a", "committed")
+    store.con.execute(
+        "UPDATE data_points SET subject_norm = 'stale' WHERE subject = 'Gamma'"
+    )
+    store.con.commit()
+    before = store.get_artifact("a")["n_rows"]
+    store.close()
+
+    result = runner.invoke(app, ["data", "commit", "a", "--run", str(bundle_dir),
+                                 "--format", "json"])
+    assert result.exit_code != 0, result.output
+    assert "subjects_filter_partially_unmatched" in result.output
+
+    # And the refusal is atomic: the store is not narrowed on the way out, or
+    # the claim-link graph would desync from a page that still cites the rows.
+    store = DataStore.open(bundle.root)
+    try:
+        assert store.get_artifact("a")["n_rows"] == before
+    finally:
+        store.close()
+
+
+def _committed_two_row_bundle(
+    tmp_path: Path, *, properties=("beta",), subjects=("Alpha", "Gamma")
+):
+    """A genuinely PUBLISHED artifact: page + `.dataspec.json` sidecar + store.
+
+    Published through the real writer so the on-disk page is the one a rebuild
+    would overwrite, which is what these tests assert stays intact. The publish
+    gate itself reads only the freshly consolidated table, not this snapshot.
+    """
+    from wikify.bundle.run.lifecycle import init_run
+
+    bundle_dir = tmp_path / "bundle"
+    (bundle_dir / "run").mkdir(parents=True)
+    bundle = Bundle(root=bundle_dir)
+    init_run(bundle, corpus_path="data/corpora/foo")
+    store = DataStore.open(bundle.root)
+    points = []
+    for subject, doc, chunk in (("Alpha", "d1", "c1"), ("Gamma", "d2", "c2")):
+        for i, prop in enumerate(properties):
+            points.append(
+                _verified(subject, prop, f"{i}.5", "", doc, f"{chunk}{i}", "q")
+            )
+    store.add_points(points)
+    spec = ArtifactSpec(
+        artifact_id="a", title="Betas", properties=list(properties),
+        subjects=list(subjects),
+    )
+    table = consolidate(store, spec)
+    store.upsert_artifact(spec, n_rows=table.n_rows)
+    store.set_artifact_claims("a", table.claim_ids)
+    store.set_artifact_status("a", "committed")
+    page = write_artifact_page(bundle.wiki_data_dir, spec, table)
+    return bundle_dir, store, page
+
+
+def test_publish_gate_covers_both_spec_axes(tmp_path: Path) -> None:
+    """Both spec axes are refused on every publish path.
+
+    Guards written for one axis kept leaving the other open: `subjects` was
+    covered while `properties` blanked a committed page with `ok: true`. All
+    THREE publish paths are exercised (`consolidate --commit`, `data commit`,
+    `data rebuild`).
+
+    This covers the total-breakage form of each axis; the partial forms are
+    `blocks_a_lost_column` and `blocks_a_named_subject_losing_its_row`.
+
+    The gate does NOT compare against the published page's rows or claims - it
+    reads only the freshly consolidated table and asks whether the spec still
+    resolves. See `_publish_blockers` for what that does and does not cover.
+    """
+    for axis, column in (("subjects", "subject_norm"), ("properties", "property_norm")):
+        for name in ("rebuild", "commit", "consolidate"):
+            root = tmp_path / f"{axis}-{name}"
+            bundle_dir, store, page = _committed_two_row_bundle(root)
+            spec_json = store.get_artifact("a")["spec_json"]
+            store.con.execute(f"UPDATE data_points SET {column} = 'stale'")
+            store.con.commit()
+            store.close()
+            before = page.read_text(encoding="utf-8")
+
+            if name == "consolidate":
+                # The path a fresh spec publishes through, and the one no test
+                # reached: its gate could be deleted with the suite green.
+                spec_path = root / "spec.json"
+                spec_path.write_text(spec_json, encoding="utf-8")
+                cmd = ["data", "consolidate", str(spec_path), "--commit"]
+            elif name == "commit":
+                cmd = ["data", "commit", "a"]
+            else:
+                cmd = ["data", "rebuild"]
+
+            result = runner.invoke(app, [*cmd, "--run", str(bundle_dir),
+                                         "--format", "json"])
+            label = f"{axis} via data {name}"
+            assert result.exit_code != 0, f"{label}: {result.output}"
+            assert page.read_text(encoding="utf-8") == before, label
+
+
+def test_publish_gate_blocks_a_lost_column(tmp_path: Path) -> None:
+    """A blanked COLUMN leaves the row count untouched, so a gate keyed on rows
+    waves it through while half the values and half the references are deleted.
+    The blocker that fires is `properties_without_cells`, derived from the
+    consolidated table's own empty columns."""
+    for cmd in (["data", "rebuild"], ["data", "commit", "a"]):
+        bundle_dir, store, page = _committed_two_row_bundle(
+            tmp_path / cmd[1], properties=("beta", "delta")
+        )
+        store.con.execute(
+            "UPDATE data_points SET property_norm = 'stale' WHERE property = 'delta'"
+        )
+        store.con.commit()
+        store.close()
+        before = page.read_text(encoding="utf-8")
+
+        result = runner.invoke(app, [*cmd, "--run", str(bundle_dir),
+                                     "--format", "json"])
+        label = " ".join(cmd)
+        assert result.exit_code != 0, f"{label}: {result.output}"
+        # Row count is UNCHANGED by the breakage — the point of the case.
+        assert page.read_text(encoding="utf-8") == before, label
+        assert "properties_without_cells" in result.output, label
+
+
+def test_publish_gate_allows_evidence_to_evolve(tmp_path: Path) -> None:
+    """The gate must NOT block evolution. A data artifact is a materialized view
+    that re-derives as evidence lands, so citations churn by design: a new paper
+    reporting a conflicting value collapses agreeing claims into a conflict cell
+    and legitimately drops some of their markers. An invariant of "no claim the
+    page cites may disappear" jammed the artifact permanently on the single most
+    ordinary event in a literature corpus."""
+    bundle_dir, store, page = _committed_two_row_bundle(tmp_path)
+    spec = ArtifactSpec(artifact_id="a", title="Betas", properties=["beta"],
+                        subjects=["Alpha", "Gamma"])
+    # TWO papers must AGREE on Alpha's value first, or nothing collapses: a
+    # conflict cell emits one marker per distinct VALUE, not per claim, so the
+    # drop only happens when agreeing claims shared a marker beforehand.
+    store.add_points([
+        _verified("Alpha", "beta", "0.5", "", "d4", "c4", "beta is 0.5 in paper four"),
+    ])
+    committed = consolidate(store, spec)
+    store.upsert_artifact(spec, n_rows=committed.n_rows)
+    store.set_artifact_claims("a", committed.claim_ids)
+    before_claims = set(committed.claim_ids)
+
+    # Now a third paper reports a DIFFERENT value: the cell becomes a conflict
+    # and one of the two agreeing claims loses its marker.
+    store.add_points([
+        _verified("Alpha", "beta", "9.9", "", "d3", "c3", "beta is 9.9 in paper three"),
+    ])
+    after_claims = set(consolidate(store, spec).claim_ids)
+    store.close()
+    # The precondition the rejected gate tripped on: a cited claim disappeared.
+    assert before_claims - after_claims, "fixture did not reproduce the collapse"
+
+    result = runner.invoke(app, ["data", "rebuild", "--run", str(bundle_dir),
+                                 "--format", "json"])
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.output)["skipped"] == []
+    assert "9.9" in page.read_text(encoding="utf-8")
+
+
+def test_publish_gate_lets_an_unnamed_subject_leave(tmp_path: Path) -> None:
+    """With no `subjects` filter the spec means "every subject with data", so a
+    subject whose claims stop qualifying leaves the table legitimately. Only a
+    subject the spec NAMES is one the operator asserted belongs on the page, and
+    only that case needs approval before the row disappears."""
+    bundle_dir, store, page = _committed_two_row_bundle(tmp_path, subjects=())
+    store.con.execute(
+        "UPDATE data_points SET verification_status = 'rejected' "
+        "WHERE subject = 'Gamma'"
+    )
+    store.con.commit()
+    store.close()
+
+    result = runner.invoke(app, ["data", "rebuild", "--run", str(bundle_dir),
+                                 "--format", "json"])
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.output)["skipped"] == []
+    assert "Gamma" not in page.read_text(encoding="utf-8")
+
+
+def test_publish_gate_blocks_a_named_subject_losing_its_row(tmp_path: Path) -> None:
+    """A spec that NAMES a subject has asserted it belongs in the table, so its
+    row vanishing is a change to approve, not to apply silently.
+
+    This is the subset case `missing_subjects` cannot see: that check tests
+    `store.subjects()`, so a subject whose label survives on some other property
+    still counts as resolving even when the claim this table needs went stale.
+    """
+    bundle_dir, store, page = _committed_two_row_bundle(tmp_path)
+    # Alpha keeps a claim under another property, so its label still resolves
+    # store-wide, but the claim THIS table needs goes stale.
+    store.add_points([_verified("Alpha", "other", "1.0", "", "d9", "c9", "q")])
+    store.con.execute(
+        "UPDATE data_points SET subject_norm = 'alpha-old' "
+        "WHERE subject = 'Alpha' AND property = 'beta'"
+    )
+    store.con.commit()
+    store.close()
+    before = page.read_text(encoding="utf-8")
+
+    result = runner.invoke(app, ["data", "rebuild", "--run", str(bundle_dir),
+                                 "--format", "json"])
+    assert result.exit_code != 0, result.output
+    payload = json.loads(result.output)
+    assert payload["skipped"][0]["error"] == "subjects_without_rows"
+    assert payload["skipped"][0]["subjects_without_rows"] == ["Alpha"]
+    assert page.read_text(encoding="utf-8") == before
+
+
+def test_rebuild_refuses_to_publish_a_draft_artifact(tmp_path: Path) -> None:
+    """`rebuild` REFRESHES published pages. Publishing a draft through it would
+    put a live page on disk without `--commit` and without the data-recall
+    gate `commit` enforces."""
+    from wikify.bundle.run.lifecycle import init_run
+
+    bundle_dir = tmp_path / "bundle"
+    (bundle_dir / "run").mkdir(parents=True)
+    bundle = Bundle(root=bundle_dir)
+    init_run(bundle, corpus_path="data/corpora/foo")
+    store = DataStore.open(bundle.root)
+    store.add_points([_verified("Alpha", "beta", "0.5", "", "d1", "c1", "q")])
+    store.upsert_artifact(
+        ArtifactSpec(artifact_id="a", title="Betas", properties=["beta"]), n_rows=1
+    )
+    store.close()
+
+    result = runner.invoke(app, ["data", "rebuild", "a", "--run", str(bundle_dir),
+                                 "--format", "json"])
+    assert result.exit_code != 0, result.output
+    assert "artifact_not_committed" in result.output
+    assert not list(bundle.wiki_data_dir.glob("*.md"))
+
+
+def test_draft_consolidate_does_not_respec_a_published_artifact(tmp_path: Path) -> None:
+    """`consolidate` WITHOUT `--commit` must not rewrite a published artifact's
+    stored spec, row count or claim links. `rebuild` reads `spec_json`, so a
+    draft build that re-specced it would have the next unattended sweep publish
+    a spec the operator explicitly declined to commit."""
+    bundle_dir, store, _page = _committed_two_row_bundle(
+        tmp_path, properties=("beta", "delta")
+    )
+    before_links = {
+        r[0] for r in store.con.execute(
+            "SELECT claim_id FROM data_artifact_claims WHERE artifact_id = 'a'"
+        )
+    }
+    assert before_links  # the fixture really published, so there is something to lose
+    before_spec = store.get_artifact("a")["spec_json"]
+    store.close()
+
+    # A draft build that drops a column from the spec.
+    spec_path = tmp_path / "spec.json"
+    spec_path.write_text(json.dumps({
+        "artifact_id": "a", "title": "Betas", "properties": ["beta"],
+        "subjects": ["Alpha", "Gamma"],
+    }), encoding="utf-8")
+    result = runner.invoke(app, ["data", "consolidate", str(spec_path),
+                                 "--run", str(bundle_dir), "--format", "json"])
+    assert result.exit_code == 0, result.output  # a draft build still reports
+
+    store = DataStore.open(Path(bundle_dir))
+    try:
+        rec = store.get_artifact("a")
+        assert rec["spec_json"] == before_spec  # spec untouched
+        assert rec["n_rows"] == 2
+        after_links = {
+            r[0] for r in store.con.execute(
+                "SELECT claim_id FROM data_artifact_claims WHERE artifact_id = 'a'"
+            )
+        }
+    finally:
+        store.close()
+    assert after_links == before_links
+
+
+def test_artifact_reference_quote_escapes_angle_brackets() -> None:
+    """The `## References` quote is claim-derived text like any cell; a quote
+    carrying `<c>` reaches the renderer as a raw tag and loses the symbol."""
+    import tempfile
+
+    store = DataStore(Path(tempfile.mkdtemp()) / "claims.db")
+    store.add_points([
+        _verified("coef", "value", "0.5", "", "d1", "c1",
+                  "the average <c> is 0.5 across markets"),
+    ])
+    table = consolidate(store, ArtifactSpec(
+        artifact_id="a", title="Coefficient <c> by market", properties=["value"],
+    ))
+    table.evidence[0]["locator"] = "Table 2, column <c>"
+    md = render_artifact_markdown(table)
+    ref = [ln for ln in md.splitlines() if ln.startswith("[^d1]:")][0]
+    # Everything that reaches the page through MARKDOWN is escaped: cells,
+    # headers, description, the References quote, the locator beside it, and
+    # the H1 - markdown passes a raw `<c>` through as an HTML tag.
+    assert "&lt;c&gt;" in ref
+    assert "Table 2, column &lt;c&gt;" in ref
+    assert "# Coefficient &lt;c&gt; by market" in md
+    body = md.split("---", 2)[2]
+    assert "<c>" not in body
+
+    # The YAML frontmatter title deliberately stays RAW: it is consumed as
+    # data and rendered through Jinja, which autoescapes. Escaping here too
+    # would double-escape it to `&amp;lt;c&amp;gt;` in the page heading.
+    front = md.split("---", 2)[1]
+    assert "title: Coefficient <c> by market" in front
+
+    from jinja2 import Environment, select_autoescape
+
+    env = Environment(autoescape=select_autoescape(["html"]))
+    rendered = env.from_string("<h1>{{ title }}</h1>").render(
+        title="Coefficient <c> by market"
+    )
+    assert rendered == "<h1>Coefficient &lt;c&gt; by market</h1>"

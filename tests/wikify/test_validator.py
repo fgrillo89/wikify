@@ -412,3 +412,354 @@ def test_validate_real_unicode_char_ok(tmp_path: Path) -> None:
     verdict = validate_response(bundle, slug)
     assert verdict["ok"], json.dumps(verdict["errors"], indent=2)
     assert verdict["structural_checks"].get("no_unicode_escapes") is True
+
+
+# ---------------------------------------------------------------------------
+# `[^eN]` resolves POSITIONALLY to draft.evidence[N-1]
+# ---------------------------------------------------------------------------
+
+
+_SHARED_SENTENCE = (
+    "The square-root law states that impact grows with the square root of "
+    "the traded volume."
+)
+
+
+def _marker_case(*, cite_index: int, ref_body: str) -> tuple[dict, dict]:
+    """A 3-entry draft whose evidence chunks SHARE one sentence.
+
+    Every chunk carries ``_SHARED_SENTENCE``, so a quote drawn from it grounds
+    against whichever entry the marker happens to select — exactly the case
+    ``quote_grounding`` alone cannot distinguish from a correct citation.
+    ``cite_index`` is the 0-based marker the prose uses; ``ref_body`` is the
+    text placed between ``[^eN]:`` and the quote.
+    """
+    evidence = [
+        {
+            "chunk_id": f"paper_{i}__c0000",
+            "doc_id": f"paper_{i}",
+            "quote": "",
+            "chunk_text": f"{_SHARED_SENTENCE} Paper {i} calibrates it on its own data.",
+        }
+        for i in range(3)
+    ]
+    draft = {
+        "page_id": "Square Root Law",
+        "page_kind": "article",
+        "title": "Square Root Law",
+        "aliases": [],
+        "skeleton": "",
+        "prompt_template": "",
+        "model_id": "claude-sonnet-4-6",
+        "tier": "M",
+        "evidence": evidence,
+    }
+    marker = f"e{cite_index + 1}"
+    filler = (
+        "Market impact measures how much the price moves against a trader who "
+        "executes a metaorder over an extended horizon. "
+    ) * 4
+    body = (
+        f"## Overview\n\n{filler} [^{marker}]\n\n"
+        f"## Mechanism\n\n{filler} [^{marker}]\n\n"
+        f"## Calibration\n\n{filler} [^{marker}]\n\n"
+        f'## References\n\n[^{marker}]: {ref_body}> "{_SHARED_SENTENCE}"\n'
+    )
+    response = {
+        "schema_version": 1,
+        "page_id": "Square Root Law",
+        "page_kind": "article",
+        "body_markdown": body,
+        "used_markers": [marker],
+        "tokens_in": 1000,
+        "tokens_out": 200,
+    }
+    return draft, response
+
+
+def test_marker_pointing_at_wrong_evidence_entry_is_rejected() -> None:
+    """A writer that numbers markers freely produces a citation whose
+    footnote names one chunk while the marker positionally selects another.
+    The quote grounds against the selected entry anyway (the chunks overlap),
+    so ``quote_grounding`` passed and the page shipped citing the wrong paper."""
+    draft, response = _marker_case(cite_index=0, ref_body="paper_2__c0000 (paper_2) ")
+    verdict = validate_response_data(draft, response)
+    assert verdict["ok"] is False
+    errs = [e for e in verdict["errors"] if e["code"] == "marker_evidence_mismatch"]
+    assert len(errs) == 1
+    # The error names BOTH indices so the fix is mechanical.
+    assert "evidence[0]" in errs[0]["message"]
+    assert "evidence[2]" in errs[0]["message"]
+    assert "e3" in errs[0]["message"]
+    assert verdict["structural_checks"]["quote_grounding"] is False
+
+
+def test_marker_matching_its_evidence_entry_passes() -> None:
+    """The same page with the marker numbered by position validates."""
+    draft, response = _marker_case(cite_index=2, ref_body="paper_2__c0000 (paper_2) ")
+    verdict = validate_response_data(draft, response)
+    assert verdict["ok"], json.dumps(verdict["errors"], indent=2)
+    assert verdict["structural_checks"]["quote_grounding"] is True
+
+
+def test_marker_mismatch_detected_from_quote_when_no_chunk_id() -> None:
+    """With no chunk id in the footnote, a quote that is verbatim in exactly
+    one OTHER entry reports the intended index rather than the generic
+    'fabricated or corrupted citation'."""
+    draft, response = _marker_case(cite_index=0, ref_body="")
+    # Make the quote unique to evidence[2] so the fallback has one candidate.
+    unique = "Paper 2 calibrates it on its own data."
+    response["body_markdown"] = response["body_markdown"].replace(
+        f'> "{_SHARED_SENTENCE}"', f'> "{unique}"'
+    )
+    verdict = validate_response_data(draft, response)
+    assert verdict["ok"] is False
+    errs = [e for e in verdict["errors"] if e["code"] == "marker_evidence_mismatch"]
+    assert len(errs) == 1
+    assert "evidence[2]" in errs[0]["message"]
+    assert "e3" in errs[0]["message"]
+    # A genuinely fabricated quote still reports quote_not_in_source.
+    draft2, response2 = _marker_case(cite_index=0, ref_body="")
+    response2["body_markdown"] = response2["body_markdown"].replace(
+        f'> "{_SHARED_SENTENCE}"', '> "no such sentence appears in any chunk"'
+    )
+    codes = [e["code"] for e in validate_response_data(draft2, response2)["errors"]]
+    assert "quote_not_in_source" in codes
+    assert "marker_evidence_mismatch" not in codes
+
+
+def test_normalize_references_refuses_to_repoint_a_mismatched_marker(
+    tmp_path: Path,
+) -> None:
+    """``draft finalize`` runs normalize-references BEFORE check, and that step
+    REWRITES every footnote from the marker index — so a mis-numbered marker
+    silently acquired a well-formed citation to the wrong source and the
+    grounding check that followed saw only the self-consistent result."""
+    import pytest
+
+    bundle, _, slug = _setup(tmp_path)
+    draft_payload = read_json(draft_path(bundle, slug))
+    # Add a second evidence entry so a marker can name the wrong one.
+    first = draft_payload["evidence"][0]
+    second = dict(first, chunk_id="paper_9__c0000", doc_id="paper_9")
+    draft_payload["evidence"] = [first, second]
+    write_json(draft_path(bundle, slug), draft_payload)
+
+    quote = first["chunk_text"][:30].strip()
+    response = _good_response(slug, chunk_quote=quote)
+    # e1 selects evidence[0] but the definition names evidence[1]'s chunk.
+    response["body_markdown"] = response["body_markdown"].replace(
+        "[^e1]: paper_0__c0000 (paper_0)", "[^e1]: paper_9__c0000 (paper_9)"
+    )
+    write_json(response_path(bundle, slug), response)
+
+    with pytest.raises(ValueError, match="POSITIONALLY"):
+        normalize_response_references(bundle, slug)
+
+
+def test_refine_build_reports_marker_remap() -> None:
+    """`[^eN]` is positional, so a rebuild that reorders or drops evidence
+    silently repoints every later marker. A refiner needs the old->new mapping
+    to re-derive its markers deterministically."""
+    from wikify.bundle.draft.builder import _marker_remap
+
+    # Append-only: indices are stable, nothing to re-derive.
+    assert _marker_remap({0: "a", 1: "b"}, ["a", "b", "c"]) == {
+        "moved": {}, "dropped": [], "stable": True,
+    }
+    # A mid-array insert shifts every later marker by one.
+    assert _marker_remap({0: "a", 1: "b"}, ["a", "x", "b"]) == {
+        "moved": {"e2": "e3"}, "dropped": [], "stable": False,
+    }
+    # A dropped record both removes its marker and shifts the rest.
+    assert _marker_remap({0: "a", 1: "b", 2: "c"}, ["a", "c"]) == {
+        "moved": {"e3": "e2"}, "dropped": ["e2"], "stable": False,
+    }
+    # The committed-page baseline is SPARSE (a page cites a subset of its
+    # evidence), so a gap must not be read as a shift.
+    assert _marker_remap({0: "a", 2: "c"}, ["a", "b", "c"]) == {
+        "moved": {}, "dropped": [], "stable": True,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Undelimited maths in prose (warning, not error)
+# ---------------------------------------------------------------------------
+
+
+def test_undelimited_math_warns_and_does_not_block() -> None:
+    """Writers delimit DISPLAY equations but write inline symbols as bare
+    prose, which renders as literal gibberish. Flag it without blocking."""
+    from wikify.bundle.draft.validator import _undelimited_math_findings
+
+    findings = _undelimited_math_findings(
+        "The propagator G_{i,j} decays as (t_i - t_j)^(-b) while sigma_D "
+        "grows, and impact scales like Q^(-5/2) with σ ≈ 0.5 and β ∝ Q.\n"
+    )
+    assert len(findings) == 1
+    assert findings[0]["code"] == "undelimited_math"
+    # G_{i,j}, t_i, t_j, sigma_D, Q^(-5/2), σ, ≈, β, ∝
+    assert "9 mathematical symbol(s)" in findings[0]["message"]
+
+
+def test_undelimited_math_detector_shapes() -> None:
+    """The detector must catch spelled-out Greek with a script (`sigma_D`) —
+    its own motivating case — without sweeping up snake_case identifiers, and
+    must not be silenced by currency amounts or an inch mark pairing into a
+    fake math / quotation span."""
+    from wikify.bundle.draft.validator import _undelimited_math_findings
+
+    def count(text: str) -> int:
+        found = _undelimited_math_findings(text)
+        return int(found[0]["message"].split()[0]) if found else 0
+
+    assert count("The value sigma_D grows and Q_nu holds.") == 2
+    assert count("Here t_i and Q^2 and G_{i,j} appear.") == 3
+    assert count("The Reynolds Re_x value.") == 1
+    # snake_case prose is not maths
+    assert count("The is_boilerplate flag and to_date column.") == 0
+    # Two dollar amounts must not pair into a math span that blanks the
+    # symbols between them - market-impact prose is full of dollar amounts.
+    # The span between these two carries no maths character, so the
+    # maths-content lookahead alone refuses to pair them.
+    assert count(
+        "A $10 million order moves price by σ ≈ 0.5 β, while a $1 million "
+        "order barely registers."
+    ) == 3
+    # ...and this is the case the lookahead CANNOT refuse: the subscript the
+    # detector is hunting for is itself the maths character that would let the
+    # span pair, so only the digit guard on the opening `$` stops it.
+    assert count(
+        "A $10 million order moves price by sigma_D, while a $5 million order "
+        "moves t_i."
+    ) == 2
+    # An inch mark must not pair with the next real quotation.
+    assert count('The 6" contract and σ rose, see "Kyle (1985)" for detail.') == 1
+
+
+def test_undelimited_math_ignores_delimited_and_quoted_regions() -> None:
+    """Math regions, fenced code, inline code, verbatim quotations, and the
+    ``## References`` block are all exempt — a quote reproduces the source's
+    own notation and is not the writer's to re-delimit."""
+    from wikify.bundle.draft.validator import _undelimited_math_findings
+
+    assert _undelimited_math_findings(
+        "The propagator $G_{i,j}$ decays as $(t_i - t_j)^{-\\beta}$ and "
+        "$$\\sigma_D = \\sqrt{V}$$ holds, with \\(Q^{-5/2}\\) and "
+        "\\[\\alpha \\approx 0.5\\].\n"
+        "A film of 100 µm and a 5 μs pulse stay plain text.\n"
+        "```\nx_1 = sigma\n```\n"
+        'The paper writes "the exponent β ≈ 0.5 in their sample".\n'
+        "Inline `Q^2` code is exempt too.\n"
+        "\n## References\n\n"
+        '[^e1]: chunk_a (doc_a) > "we find β ≈ 0.5 with σ_D fixed"\n'
+    ) == []
+
+
+def test_undelimited_math_surfaces_as_a_non_blocking_verdict_warning() -> None:
+    draft, response = _marker_case(cite_index=0, ref_body="paper_0__c0000 (paper_0) ")
+    response["body_markdown"] = response["body_markdown"].replace(
+        "## Calibration\n\n",
+        "## Calibration\n\nThe fitted exponent is β ≈ 0.5 for sigma_D. ",
+    )
+    verdict = validate_response_data(draft, response)
+    assert verdict["ok"], json.dumps(verdict["errors"], indent=2)
+    assert [w["code"] for w in verdict["warnings"]] == ["undelimited_math"]
+    assert verdict["structural_checks"]["math_delimited"] is False
+
+
+def test_normalizer_and_validator_agree_on_marker_mismatch() -> None:
+    """`draft check` and `normalize-references` implement the same rule and MUST
+    reach the same verdict: normalization rewrites definitions FROM the marker
+    index, so any mismatch it cannot see is one it silently repoints. They drifted
+    once already — the normalizer's regex lacked DOTALL, so a quote wrapped onto a
+    second line parsed in the validator and not in the normalizer."""
+    from wikify.bundle.draft.references import (
+        _assert_markers_match_evidence,
+        parse_ref_chunk_ids,
+        parse_ref_defs,
+    )
+    from wikify.bundle.draft.schema import WriteRequest
+    from wikify.bundle.draft.validator import _marker_mismatch_error
+
+    def draft_with(chunk_ids: list[str]) -> WriteRequest:
+        return WriteRequest.model_validate({
+            "page_id": "P", "page_kind": "article", "title": "P", "aliases": [],
+            "skeleton": "", "prompt_template": "", "model_id": "m", "tier": "M",
+            "evidence": [
+                {"chunk_id": c, "doc_id": "d", "quote": "", "chunk_text": "text"}
+                for c in chunk_ids
+            ],
+        })
+
+    draft = draft_with(["cA", "cB"])
+    bodies = {
+        # quote wrapped onto a second line, marker e1 wrongly names cB
+        "wrapped": '## References\n\n[^e1]: cB (d) > "a quote the writer\nwrapped"\n',
+        # definition placed BEFORE the References heading
+        "pre-heading": '[^e1]: cB (d) > "q"\n\n## References\n',
+        # correct
+        "correct": '## References\n\n[^e1]: cA (d) > "q"\n',
+        # duplicate chunk: e1 correctly names the first occurrence
+        "duplicate": '## References\n\n[^e1]: cA (d) > "q"\n',
+    }
+    drafts = {k: draft for k in bodies} | {"duplicate": draft_with(["cA", "cB", "cA"])}
+
+    for name, body in bodies.items():
+        d = drafts[name]
+        # Ask the VALIDATOR itself, not a re-implementation of its rule: a
+        # test that derives the expected answer from the shared parser can
+        # only detect drift in that parser, never in the check it is named
+        # for. Verified by disabling `_marker_mismatch_error` — this must fail.
+        validator_flags = any(
+            _marker_mismatch_error(
+                idx, d, cid, parse_ref_defs(body).get(idx, ("", ""))[1]
+            ) is not None
+            for idx, cid in parse_ref_chunk_ids(body).items()
+        )
+        try:
+            _assert_markers_match_evidence(body, d)
+            normalizer_flags = False
+        except ValueError:
+            normalizer_flags = True
+        assert normalizer_flags == validator_flags, name
+
+    # The two mis-numbered cases must actually be caught, not merely agree on "no".
+    for name in ("wrapped", "pre-heading"):
+        try:
+            _assert_markers_match_evidence(bodies[name], drafts[name])
+            raise AssertionError(f"{name} was not rejected")
+        except ValueError:
+            pass
+
+
+def test_malformed_definition_cannot_hide_the_ones_after_it() -> None:
+    """Definitions are parsed block-by-block, not with one multi-line regex.
+    With DOTALL, a definition that cannot close on its own line (no `> "quote"`
+    tail, or an odd number of quote characters) runs past itself and swallows
+    every definition after it. Both the validator and the normalizer read these
+    through the same parser, so they would go blind TOGETHER — agreeing while
+    both were wrong — and normalization would then rewrite the swallowed
+    definitions from the marker index, silently repointing the exact citations
+    the mismatch check exists to catch."""
+    from wikify.bundle.draft.references import parse_ref_chunk_ids, parse_ref_defs
+
+    swallowing = (
+        '## References\n\n'
+        '[^e1]: ch_a (d1) > "unterminated\n'
+        '[^e2]: ch_b (d1) > "a real quote."\n'
+    )
+    assert parse_ref_chunk_ids(swallowing) == {1: "ch_b"}
+    assert 0 not in parse_ref_defs(swallowing)  # malformed, not "absent"
+
+    # Shapes that must still parse: a quote wrapped onto a second line, a
+    # definition before the heading, and a quote containing quote characters.
+    assert parse_ref_chunk_ids(
+        '## References\n\n[^e1]: ch_a (d1) > "a quote the writer\nwrapped"\n'
+    ) == {0: "ch_a"}
+    assert parse_ref_chunk_ids('[^e1]: ch_a (d1) > "q"\n\n## References\n') == {
+        0: "ch_a"
+    }
+    assert parse_ref_defs('[^e1]: ch_a (d1) > "he called it "c" here"\n')[0][1] == (
+        'he called it "c" here'
+    )

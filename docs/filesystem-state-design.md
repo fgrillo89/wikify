@@ -371,6 +371,7 @@ type raises a validation error):
 - `page_embedding_failed`
 - `data_page_collision_skipped`
 - `page_recall_cleared`
+- `editor_ruling`
 
 Examples:
 
@@ -957,7 +958,12 @@ corpus exploration is read-only.
 
 `data` owns the data-wave numeric claim store (`claims.db`) and its evolving
 `kind=data` artifact tables: `add` / `list` / `show` / `query` / `coverage` /
-`consolidate` / `commit` / `rebuild` / `list-artifacts`.
+`harvest-property` / `reindex` / `relabel` / `consolidate` / `commit` /
+`rebuild` / `list-artifacts`. `reindex` and `relabel` are the maintenance
+pair for derived state: `reindex` recomputes `subject_norm` /
+`property_norm` after a `normalize_key` revision leaves stored keys stale,
+and `relabel` rewrites a claim's `subject` / `property` label without
+touching its value, provenance, or verification status.
 
 Everything else is a sub-kind, positional handle, or option:
 

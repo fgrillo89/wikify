@@ -102,8 +102,9 @@ telemetry to different model tiers:
   editor. It makes NO per-chunk model calls, so it exercises no judge
   tier; its cost is the editor's (tier L, inline, off the call ledger). A
   run dominated by `build-evidence` shows ~zero S-tier (haiku) usage —
-  expected, not a bug. Note that `build-evidence` does not emit an
-  `evidence_added` event (see `maturity.md`); the editor must emit it.
+  expected, not a bug. It self-emits an `evidence_added` event whenever it
+  appends at least one record (see `maturity.md`), so do not hand-emit a
+  second one for the same gather.
 - **`gather-evidence` — haiku-judge fleet.** Fans out cheap S-tier
   (haiku) judges that emit per-chunk routing / score / quote, then
   commits one ledger per slug. Use it when model judgement over each

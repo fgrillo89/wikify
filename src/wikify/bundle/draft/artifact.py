@@ -23,7 +23,9 @@ from ...api import Bundle
 
 # Scratch keys written into draft.json alongside the WriteRequest payload that
 # are NOT part of the WriteRequest schema and must be stripped before parsing.
-DRAFT_ENVELOPE_KEYS = frozenset({"schema_version", "task", "dropped_empty_evidence"})
+DRAFT_ENVELOPE_KEYS = frozenset(
+    {"schema_version", "task", "dropped_empty_evidence", "marker_remap"}
+)
 
 
 def strip_draft_envelope(data: dict) -> dict:

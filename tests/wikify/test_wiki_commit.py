@@ -348,3 +348,85 @@ def test_rebuild_index_lists_committed_pages(tmp_path: Path) -> None:
     payload = json.loads(bundle.derived_index_path.read_text(encoding="utf-8"))
     pages = payload["pages"]
     assert any(p["slug"] == slug for p in pages)
+
+
+def test_refine_marker_remap_survives_commit_gc(tmp_path: Path) -> None:
+    """`wiki commit` garbage-collects draft.json, so a refine of a COMMITTED
+    page has no prior draft to diff against. Without a fallback the remap
+    always reported `stable: true` — exactly wrong for the case it exists to
+    cover. The committed page's `wiki_evidence` marker bindings are the
+    surviving record of the old ordering."""
+    from wikify.bundle.draft.builder import build_draft
+    from wikify.bundle.work.evidence import EvidenceRecord, append_evidence
+
+    bundle, slug = _setup_validated(tmp_path)
+    corpus = _make_corpus(tmp_path / "corpus")
+    commit_page(bundle, slug=slug)
+    assert not draft_path(bundle, slug).exists()  # gc ran
+
+    # Grow the slug so the committed page's e1 chunk is no longer at index 0.
+    append_evidence(
+        bundle, slug,
+        [EvidenceRecord(chunk_id="paper_1__c0000", doc_id="paper_1")],
+    )
+    # Rewrite the ledger so the new record leads (an inbox drain / dedup pass
+    # can reorder it), pushing the committed e1 chunk to index 1.
+    from wikify.bundle.work.evidence import evidence_path, read_evidence
+
+    recs = read_evidence(bundle, slug)
+    evidence_path(bundle, slug).write_text(
+        "\n".join(r.model_dump_json() for r in reversed(recs)) + "\n",
+        encoding="utf-8",
+    )
+
+    build_draft(
+        bundle, slug=slug, corpus=corpus, task="refine",
+        model_id="claude-sonnet-4-6", tier="M",
+    )
+    remap = read_json(draft_path(bundle, slug))["marker_remap"]
+    assert remap["source"] == "committed_page"
+    assert remap["stable"] is False
+    assert remap["moved"] == {"e1": "e2"}
+    assert remap["dropped"] == []
+
+
+def test_refine_marker_remap_survives_a_second_build(tmp_path: Path) -> None:
+    """The first refine build writes draft.json in the NEW order. A second
+    `draft build --task refine` (the editor rebuilds after adding evidence, or
+    just re-runs) must not adopt that as its baseline and compare it against
+    itself — the markers have still moved relative to the committed page the
+    refiner is actually editing."""
+    from wikify.bundle.draft.builder import build_draft
+    from wikify.bundle.work.evidence import (
+        EvidenceRecord,
+        append_evidence,
+        evidence_path,
+        read_evidence,
+    )
+
+    bundle, slug = _setup_validated(tmp_path)
+    corpus = _make_corpus(tmp_path / "corpus")
+    commit_page(bundle, slug=slug)
+    append_evidence(
+        bundle, slug,
+        [EvidenceRecord(chunk_id="paper_1__c0000", doc_id="paper_1")],
+    )
+    recs = read_evidence(bundle, slug)
+    evidence_path(bundle, slug).write_text(
+        "\n".join(r.model_dump_json() for r in reversed(recs)) + "\n",
+        encoding="utf-8",
+    )
+
+    first = None
+    for _ in range(2):
+        build_draft(
+            bundle, slug=slug, corpus=corpus, task="refine",
+            model_id="claude-sonnet-4-6", tier="M",
+        )
+        remap = read_json(draft_path(bundle, slug))["marker_remap"]
+        if first is None:
+            first = remap
+        assert remap["source"] == "committed_page"
+        assert remap["stable"] is False
+        assert remap["moved"] == {"e1": "e2"}
+    assert remap == first  # idempotent across rebuilds

@@ -496,17 +496,20 @@ def cmd_check(
         False,
         "--full",
         help=(
-            "Also compute citation-marker indexing coverage "
-            "(requires probing the SQLite graph store — slower)."
+            "Also compute citation-marker indexing coverage and the "
+            "text_defects scan (requires probing the SQLite graph store and "
+            "reading every chunk body - slower)."
         ),
     ),
 ) -> None:
     """Report corpus health: doc/chunk counts, derived artifacts, field.
 
-    The default form stays fast by skipping citation-index coverage.
+    The default form stays fast by skipping the two scanning checks.
     Pass ``--full`` to also report ``cite_index`` coverage (% of
     in-corpus sources whose ``ord_refs`` is populated — relevant for
-    ``traverse <chunk> --to cited-in-corpus``).
+    ``traverse <chunk> --to cited-in-corpus``) and ``text_defects``
+    (chunks whose extraction artifacts make a span unquotable; costs one
+    pass over every chunk body).
     """
     corpus = _resolve_corpus(corpus_dir)
     fmt = _resolve_simple_format(fmt)
@@ -544,6 +547,25 @@ def cmd_check(
         typer.echo(
             f"cite_index:  {with_ord}/{summary['n_docs']} docs "
             f"({cov}% coverage for `cited-in-corpus`)"
+        )
+    defects = summary.get("text_defects")
+    if defects and (
+        defects["chunks_with_control_chars"] or defects["chunks_with_soft_hyphens"]
+    ):
+        typer.echo(
+            f"text_defects: {defects['chunks_with_control_chars']} chunk(s) carry "
+            f"control chars (dropped ligatures), "
+            f"{defects['chunks_with_soft_hyphens']} carry in-word soft hyphens; "
+            "spans in these chunks cannot be quoted verbatim"
+        )
+    for d in summary.get("degenerate_metrics") or []:
+        typer.echo(
+            f"warning:     {d['node_type']}.{d['metric']} is DEGENERATE: "
+            f"{d['tied_share']:.0%} of {d['n_nodes']} nodes share one value "
+            f"and only {d['n_ranked_above_tie']} rank above it "
+            f"({d['n_distinct_values']} distinct values). A top-K by this "
+            "metric exhausts them and falls back to the tie-break "
+            "(alphabetical order); use relevance-based ordering."
         )
 
 

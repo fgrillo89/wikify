@@ -253,14 +253,21 @@ substring of the chunk text (ids whose quote is fabricated are rejected
 with `rejected_quote_not_in_chunk`). It dedups by chunk_id, so a re-run
 or top-up on an existing `evidence.jsonl` is safe.
 
-**`build-evidence` does NOT emit an `evidence_added` event.** The
-growth-stall maturity gate keys off `evidence_added` events scoped to
-the current round; a slug grown only through `build-evidence` looks
-permanently stalled. After this skill commits, the editor MUST emit one
-`evidence_added` per grown slug, scoped to the current round (e.g.
-`wikify work add evidence <slug> --round <n>`), or the gate never
-advances. Surface every committed slug in the return envelope so the
-editor can emit the events.
+**`build-evidence` self-emits an `evidence_added` event** whenever it
+appends at least one record, so the growth-stall maturity gate sees the
+growth with no follow-up call. Do NOT emit a second one for the same
+gather — a duplicate event resets the slug's stall timer for a round it
+did not actually grow. Still surface every committed slug in the return
+envelope so the editor can account for it.
+
+Each `--from-ids` call also returns a `rejections` array —
+`{chunk_id, reason, message?, section_type?, n_chars?}` per id that did
+not make it in, alongside the aggregate `stats` counters. Read it before
+re-searching: `rejected_excluded_kind` means the chunk EXISTS but is a
+caption / references / acknowledgments chunk that is excluded from
+citation by design, so the content is not missing and searching again
+will not find a citable copy. Cite a body chunk that states the same
+fact, or record the gap as an `editor_ruling`.
 
 For slugs with `< 6` accepts, do NOT commit; mark them as a workflow
 signal in the per-slug envelope (`stop_reason: "pool_exhausted"`,

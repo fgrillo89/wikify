@@ -69,9 +69,20 @@ Hard grounding rules:
 
 ## Citation format (exact)
 
+- **`N` is an INDEX, not a label.** `[^eN]` resolves POSITIONALLY to the
+  Nth (1-based) entry of `draft.json`'s `evidence` array — `[^e7]` means
+  `evidence[6]`, always. The dossier's **Marker index** table is that
+  array in order; take the marker for a chunk from that table and never
+  renumber. Markers chosen freely (by order of first use in prose, say)
+  produce citations that point at the WRONG paper while still reading as
+  well-formed, because a quote often also occurs in the entry the marker
+  landed on. `wikify draft check` rejects this as
+  `marker_evidence_mismatch` and names both indices.
 - Use `[^eN]` markers in prose. Every marker has exactly ONE matching
   definition in the final `## References` section, form:
-  `[^eN]: <chunk_id> (<doc_id>) > "<verbatim quote>"`.
+  `[^eN]: <chunk_id> (<doc_id>) > "<verbatim quote>"`. The `<chunk_id>`
+  MUST be `evidence[N-1].chunk_id`; it is what the validator cross-checks
+  the marker index against.
 - `<quote>` MUST be a verbatim substring of the cited source chunk's
   STORED text (the chunk body in the dossier / `draft.json`), not merely
   of the rendered `> **Selected quote:**` line, which may be a truncated
@@ -85,6 +96,15 @@ Hard grounding rules:
   summary sentences ride on the nearest marker. Do not stack every
   marker at a paragraph end.
 - Do not cite a source for a claim its quote does not support.
+- **Adjacent context is readable, never citable.** A chunk's
+  `<details>` adjacent block is synthesis context only; quotes must come
+  from the chunk itself. When the dossier prints a **NOT CITABLE —
+  promote first** notice above that block, the neighbouring chunk holds
+  an equation or table your chunk only refers to. Do NOT paraphrase the
+  number into a cited sentence and do NOT quote across the boundary —
+  write the page without it and report the gap as a workflow signal
+  (name the marker and what the neighbour carries) so the chunk is
+  promoted to first-class evidence.
 - **Cite as / GENERAL data claims.** The dossier's Available-data index
   gives each value a `Cite as` marker. Ground a general data claim
   INLINE by attaching that marker to the value in prose. Never paste
@@ -202,6 +222,24 @@ diff; the commit gate promotes whole pages.
   delimiters when the evidence contains them (inline scalar relations,
   display equations on their own line, sub/superscripts, `$\ce{...}$`
   mhchem for reactions).
+- **INLINE maths counts.** Delimiting display equations is not enough:
+  EVERY mathematical symbol, subscript, superscript and relation in
+  running prose must be delimited too. Write `$\sigma_D$`, not `σ_D` or
+  `sigma_D`; `$G_{i,j} \approx (t_i - t_j)^{-\beta}$`, not
+  `G_{i,j} ≈ (t_i − t_j)^(−β)`; `$Q^{-5/2}$`, not `Q^(−5/2)`. Undelimited
+  notation renders as literal text, and a page with zero inline `$...$`
+  is almost always wrong.
+- **Never paste Unicode maths characters.** Greek letters and operators
+  (`σ β δ α λ ≈ ∝ ∼ ≤ ≥ ≠ − × ⟨ ⟩`) go in as LaTeX commands inside a
+  math region (`$\sigma$`, `$\approx$`, `$\propto$`, `$\langle c
+  \rangle$`), never as the raw character. A bare `<c>` for ⟨c⟩ is worse
+  still: markdown eats it as an HTML tag and the symbol vanishes.
+  Exception: plain unit strings (`100 nm`, `5 µs`, `1.8 V`) stay plain
+  text.
+- `wikify draft check` reports an `undelimited_math` **warning** counting
+  every symbol left outside a math region (verbatim quotations, fenced
+  code and the `## References` block are exempt). It does not block the
+  commit — fix the count to zero before persisting anyway.
 - Do not invent equations. If the quoted evidence has no formula, add
   none. Plain unit strings (`100 nm`, `1.8 V`) stay plain text, not math.
 - `response.json` is JSON, so EVERY backslash inside a math region must
@@ -298,7 +336,10 @@ from supplied evidence; every `{{figure:<anchor>}}` has a matching
 five fields with a non-empty `source_marker` in `used_markers`;
 figure-candidate scan applied; person pages have >= 2 non-appendix H2
 sections; the page uses enough high-quality evidence to be comprehensive,
-not merely valid; math regions use double-backslash JSON escapes;
+not merely valid; math regions use double-backslash JSON escapes; every
+inline symbol/subscript/superscript/relation in prose is delimited and no
+Unicode maths character was pasted (`draft check` reports
+`undelimited_math` with a count);
 evidence-grounding spot-check re-applied to every section.
 
 Then run the deterministic structural pre-check (reads candidate from

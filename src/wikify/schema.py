@@ -519,6 +519,18 @@ class WriteEvidenceRef(BaseModel):
     # the validator only checks ``quote`` against ``chunk_text``, not against
     # ``context_window``.
     context_window: str = ""
+    # Asset kinds present in ``context_window`` but NOT in the primary chunk,
+    # e.g. ``["equation", "table"]``. Relevance-ranked retrieval favours prose
+    # that DESCRIBES a result over the equation or table that STATES it, so a
+    # paper's headline formula or fitted coefficient routinely lands in the
+    # chunk adjacent to the selected one — readable, but not citable. Set only
+    # when adjacent context was requested; a non-empty value is the signal to
+    # PROMOTE the neighbouring chunk to first-class evidence before writing.
+    context_window_assets: list[str] = Field(default_factory=list)
+    # Chunk ids of the neighbours carrying those assets. Without these the
+    # promotion is not actionable: the caller is told to promote a chunk it
+    # has no id for, and the context window labels neighbours only by ``ord``.
+    promotable_chunk_ids: list[str] = Field(default_factory=list)
     # Free-form label naming the sub-query / topic that retrieved this
     # chunk. Empty for single-concept baseline; populated by refinement
     # and exploration strategies that gather evidence via multiple

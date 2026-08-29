@@ -63,7 +63,7 @@ wikify corpus find "X" --by paper --rank citation_count           # most-cited a
 
 ```bash
 wikify corpus schema [--format text|json]      # self-describe the surface
-wikify corpus check [<corpus>] [--format text|json]
+wikify corpus check [<corpus>] [--full] [--format text|json]
 wikify corpus list docs   [--corpus <c>]
 wikify corpus list chunks [--corpus <c>] [--doc <doc-id>]
 wikify corpus list files  [--corpus <c>]
@@ -82,6 +82,28 @@ wikify corpus repl [--corpus <c>]
 
 Missing-corpus-everywhere produces a clear error listing all three
 resolution options.
+
+## Two `corpus check` health signals worth reading before a build
+
+- `degenerate_metrics` (always reported): ranking metrics a top-K cannot
+  fill with distinguishable nodes, as `{graph_name, node_type, metric,
+  n_nodes, n_distinct_values, tied_share, n_ranked_above_tie}`. An entry
+  means BOTH that the largest tied block covers >90% of the nodes AND that
+  fewer than 12 nodes rank above that block — so a top-K exhausts the
+  distinguishable ones and pads the rest alphabetically. A
+  `document.pagerank` entry means the citation graph never resolved and
+  every document sits on the same baseline; seed on relevance instead.
+  Only metrics a caller can actually ORDER BY are checked. Note the block
+  need not be at the TOP: `citation_count` with most documents at 0 IS
+  flagged when fewer than 12 documents have any citations, because a top-K
+  there really is mostly padding.
+- `text_defects` (needs `--full`): `{chunks_with_control_chars,
+  chunks_with_soft_hyphens}`. A dropped ligature leaves a control
+  character mid-word (`di<0x0f>usivity`) and a soft hyphen splits an
+  ordinary word (`real­world`); a writer retypes the word as rendered and
+  the verbatim-quote gate rejects it, so spans in those chunks are
+  effectively unquotable. High counts mean writers will hit it page by
+  page.
 
 ## Handles
 
