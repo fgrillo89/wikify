@@ -66,6 +66,18 @@ mutations stay on the `wikify` bash CLI.
    Use a single, consistent `--owner` (`refine`) for the whole pass; the
    finalize step must release under the same owner.
 
+   **Markers are positional, and a rebuild can move them.** `[^eN]`
+   resolves to the Nth (1-based) entry of `draft.json`'s `evidence`
+   array, so a growth step that drops or reorders records repoints every
+   later marker. `draft build --task refine` reports the mapping as
+   `marker_remap` (`{"moved": {"e5": "e7"}, "dropped": ["e2"],
+   "stable": true|false}`) in its JSON output and as a warning line in
+   text mode. When `stable` is false, re-derive the replacement page's
+   markers from the CURRENT dossier Marker index — never carry markers
+   over verbatim from the committed page. `wikify draft check` rejects a
+   marker whose footnote names a different entry's `chunk_id` as
+   `marker_evidence_mismatch`.
+
 5. Write the replacement page with the `write-page` skill, consulting
    `../write-page/references/refinement-style.md`. Return a complete
    `WriteResponse`, not a diff; the commit gate promotes whole pages.

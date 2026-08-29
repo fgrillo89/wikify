@@ -23,6 +23,34 @@ _TIERS = {
 }
 
 
+class SubjectFilterUnmatchedError(ValueError):
+    """A non-empty ``ArtifactSpec.subjects`` filter matched no stored claim.
+
+    The filter compares ``normalize_key(spec subject)`` against the stored
+    ``subject_norm`` column, so a spec spelling that matches nothing — or a
+    stale ``subject_norm`` written by an older ``normalize_key`` — produces a
+    silent 0-row table rather than an error. Consolidation refuses instead.
+    """
+
+    def __init__(self, requested: list[str], available: list[str]) -> None:
+        # Both sides are shown as NORMALIZED keys, because that is what the
+        # filter actually compares. Printing the spec's raw spelling next to
+        # normalized stored keys made a match look like a mismatch and sent
+        # the reader hunting for a difference that normalization had already
+        # erased.
+        requested_norm = sorted({normalize_key(s) for s in requested})
+        super().__init__(
+            f"no stored claim has any of these subject keys: {requested_norm} "
+            f"(from spec subjects {requested}). Stored subject keys include: "
+            f"{available[:10]}. Fix the spec spelling, or run "
+            "`wikify data reindex` if these claims were written by an older "
+            "normalize_key."
+        )
+        self.requested = requested
+        self.requested_norm = requested_norm
+        self.available = available
+
+
 @dataclass
 class Cell:
     text: str = ""
@@ -42,6 +70,11 @@ class ConsolidatedTable:
     claim_ids: list[str]
     n_conflicts: int = 0
     empty_columns: list[str] = field(default_factory=list)  # spec props with no claims
+    # Spec subjects that match no stored claim at all. The table still renders
+    # from the subjects that DO resolve, so a typo in one of many no longer
+    # blanks the artifact - but it must not vanish either, which is how a
+    # silently-narrowed table reads as a complete one.
+    missing_subjects: list[str] = field(default_factory=list)
 
     @property
     def n_rows(self) -> int:
@@ -136,6 +169,35 @@ def consolidate(
             subject_display.setdefault(sn, claim["subject"])
             grouped.setdefault(sn, {}).setdefault(pk, []).append(claim)
 
+    # A subjects filter naming a subject the store has never heard of yields a
+    # 0-row table with no error, which reads downstream as "no data for these
+    # subjects" when the real cause is a spec spelling or a stale
+    # ``subject_norm``.
+    #
+    # The test is deliberately against the WHOLE store, not against ``grouped``:
+    # an empty ``grouped`` also means "this subject exists but its property has
+    # not been harvested yet" or "its claims are below min_verification", both
+    # of which are legitimate not-yet states a DRAFT build must still render.
+    # Only a subject that resolves to no stored claim AT ALL is an authoring
+    # error here. (Publishing is stricter: ``_publish_blockers`` additionally
+    # refuses a named subject that contributes no row, which is the case this
+    # store-wide test cannot see.) The committed-snapshot path
+    # (``restrict_claim_ids``) is exempt: it may legitimately reproduce fewer
+    # claims than the spec names.
+    missing_subjects: list[str] = []
+    if subject_filter is not None and restrict_claim_ids is None:
+        stored_subject_norms = {s["subject_norm"] for s in store.subjects()}
+        missing_subjects = [
+            subj for subj in spec.subjects
+            if normalize_key(subj) not in stored_subject_norms
+        ]
+        # An empty store is "no data harvested yet", not an authoring error;
+        # gating it would turn a first `data consolidate` into a hard failure.
+        if stored_subject_norms and not (subject_filter & stored_subject_norms):
+            raise SubjectFilterUnmatchedError(
+                list(spec.subjects), sorted(stored_subject_norms)
+            )
+
     rows: list[dict] = []
     n_conflicts = 0
     # Row order: follow the spec's subject list when given, else by display
@@ -199,4 +261,5 @@ def consolidate(
         claim_ids=list(claim_ids_seen.keys()),
         n_conflicts=n_conflicts,
         empty_columns=empty_columns,
+        missing_subjects=missing_subjects,
     )

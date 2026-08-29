@@ -104,8 +104,16 @@ most one retry.
 Re-cluster (chunks now drive grouping) via `wikify work cluster-concepts
 --by auto`. Per slug: `wikify work claim` then `wikify draft build`
 with `--task create --tier M --with-adjacent` (loads ord-1/ord+1
-flanking chunks for synthesis). Spawn **one** `write-page`
-Task per cluster.
+flanking chunks for synthesis). Read the build's
+`promotion_candidates`: each entry names a marker whose ADJACENT window
+holds an equation or table the cited chunk only refers to — retrieval
+ranks the prose that describes a result above the formula that states
+it, so the headline number routinely lands one chunk over, where the
+citation rule forbids quoting it. Each entry carries `promote_chunk_ids`
+(the neighbour ids), so promote them to first-class evidence with
+`wikify work build-evidence <slug> --from-ids <promote_chunk_ids> ...`
+and rebuild the draft BEFORE dispatching the writer; otherwise the page ships with the theory and without the
+numbers. Spawn **one** `write-page` Task per cluster.
 
 Per page, run `wikify draft finalize <slug> --owner baseline` — the
 single-shot normalize → check → commit → release chain, short-

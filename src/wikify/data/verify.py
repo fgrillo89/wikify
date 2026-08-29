@@ -17,12 +17,27 @@ so this module has no corpus dependency and is trivially testable.
 
 from __future__ import annotations
 
+import re
+
 from ..grounding import is_grounded, normalize_grounding_text
 from .models import (
+    _BARE_FRACTION_RE,
     _NUMBER_RE,
     DataPoint,
+    collapse_number_spacing,
     collapse_spaced_thousands,
     parse_leading_number,
+)
+
+# A fraction written inline in prose ("an exponent of 1/2", "3 / 4 of the
+# spread"). Matched in the SOURCE text so the quotient it denotes is offered
+# as a comparison key alongside its two literal integers.
+# The sign is part of the match: ``parse_leading_number`` reads ``-1/2`` as
+# -0.5 (unicode minus too), so a source side blind to the sign could never
+# offer the matching key - and negative fractional exponents are the canonical
+# shape in this literature.
+_FRACTION_IN_TEXT_RE = re.compile(
+    r"(?<![\d.])([-+−]?)\s*(\d+)\s*/\s*(\d+)(?![\d.])"
 )
 
 # Single-number value types — a scalar/bound must reduce to ONE number, so a
@@ -74,21 +89,83 @@ def is_ocr_mangled_scalar(value: str) -> bool:
     return not _is_grouped_thousands(tokens)
 
 
-def _numbers(s: str) -> set[str]:
+# A collapsed reading is admitted only for magnitudes a spaced decimal
+# plausibly denotes. The shape is genuinely ambiguous — "0 . 549" is a mangled
+# coefficient, "2005 . 12" is a sentence boundary — and nothing in the token
+# stream separates them. What DOES separate them is scale: OCR-spaced decimals
+# in this literature are coefficients and exponents, so their integer part is
+# short. A 4-digit integer part is a year, a count, or an identifier, and
+# joining it to the next sentence's leading number invents a value that was
+# never printed. Bounding the integer part removes that shape. It does NOT
+# remove the whole class: a 1-3 digit left-hand number at a sentence or
+# section boundary (``Section 4 . 2``) still joins. The union with the literal
+# reading keeps the real numbers intact either way, so the residue is a
+# narrow over-acceptance, not a lost value.
+_SPACED_DECIMAL_MAX_INT_DIGITS = 3
+
+
+def _plausible_spaced_decimal(token: str) -> bool:
+    """Whether a token produced ONLY by the decimal join may be admitted.
+
+    Callers must have already excluded tokens the literal or thousands-grouped
+    readings produce; this judges the ambiguous residue alone.
+    """
+    intpart = token.lstrip("+-−").split(".", 1)[0]
+    return len(intpart) <= _SPACED_DECIMAL_MAX_INT_DIGITS
+
+
+def _numbers(s: str, *, allow_fractions: bool = False) -> set[str]:
     """Numeric tokens in *s* as a set of comparison keys.
 
     Uses the same exponent-/thousands-aware regex as ``parse_leading_number``
     and reduces each token to its float-normalized form, so ``2.5e-3``,
     ``0.0025``, ``1.10`` and ``1.1`` all collapse to one key and match a
     target parsed the same way.
+
+    Every key added here WIDENS the gate, so each alternate reading has to earn
+    its place:
+
+    - The space-collapsed reading is unioned with the literal one rather than
+      replacing it, because collapsing is a guess and replacing would erase
+      real numbers ("runs to 2005. 12 of the 30 stocks").
+    - Prose uses the STRICTER collapse (whitespace required before the period)
+      AND admits a collapsed token only when its integer part is short enough
+      to be a real coefficient. Both guards are needed: the first declines
+      ``2005. 12``, the second declines ``2005 . 12``, and without them a
+      fabricated ``2005.12`` verifies against "runs to 2005 . 12 of the 30
+      stocks". The knowingly uncovered case is ``0. 549`` — a right-spaced
+      decimal, which is indistinguishable from a sentence boundary and is
+      therefore not normalized. ``0 . 549`` and ``79 .13`` are.
+    - Fraction quotients are added ONLY when the caller says the target is
+      itself a bare fraction (``allow_fractions``). Offering ``0.5`` for every
+      ``a/b`` in the text would let a claim of 0.5 verify against an unrelated
+      ``10/20``.
     """
+    raw = s or ""
     out: set[str] = set()
-    # Collapse space-grouped thousands first so "10 000" reads as 10000, the
-    # same magnitude parse_leading_number derives for the target value.
-    for m in _NUMBER_RE.finditer(collapse_spaced_thousands(s or "")):
-        tok = m.group(0)
-        cleaned = tok.replace("−", "-").replace(",", "").replace(" ", "")
-        out.add(cleaned)
+
+    def _tokens(text: str) -> set[str]:
+        return {
+            m.group(0).replace("−", "-").replace(",", "").replace(" ", "")
+            for m in _NUMBER_RE.finditer(text)
+        }
+
+    # Three readings, and only the third is bounded. Thousands grouping is
+    # unambiguous even when it carries a fraction (``10 000.5`` -> ``10000.5``,
+    # which _SPACED_THOUSANDS_RE joins on purpose), so it must NOT be judged by
+    # the decimal bound - doing so rejects ordinary market magnitudes outright.
+    # Only tokens that appear solely after the DECIMAL join are the ambiguous
+    # ones, and those are bounded by magnitude.
+    literal = _tokens(raw)
+    grouped = _tokens(collapse_spaced_thousands(raw))
+    joined = _tokens(collapse_number_spacing(raw, in_prose=True))
+    for tok in literal | grouped:
+        out.add(tok)
+    for tok in joined - literal - grouped:
+        if _plausible_spaced_decimal(tok):
+            out.add(tok)
+
+    for cleaned in list(out):
         try:
             val = float(cleaned)
         except ValueError:
@@ -96,6 +173,16 @@ def _numbers(s: str) -> set[str]:
         out.add(repr(val))
         if val == int(val):
             out.add(str(int(val)))
+    if allow_fractions:
+        # A fraction is how a paper states an exponent ("we set the exponent to
+        # 1/2"), and ``parse_leading_number`` reads a bare fraction as its
+        # quotient, so the source must offer the same key or the claim could
+        # never verify against the text it came from.
+        for m in _FRACTION_IN_TEXT_RE.finditer(raw):
+            sign, num, den = m.group(1), float(m.group(2)), float(m.group(3))
+            if den:
+                q = num / den
+                out.add(repr(-q if sign in {"-", "−"} else q))
     return out
 
 
@@ -122,8 +209,11 @@ def number_supported(value: str, quote: str, source: str) -> bool:
     # Integer-valued floats also written without a decimal point.
     if target == int(target):
         target_keys.add(str(int(target)))
-    q_nums = _numbers(quote)
-    s_nums = _numbers(source)
+    # The fraction reading is warranted only when the VALUE is a bare fraction,
+    # which is the sole case ``parse_leading_number`` reads as a quotient.
+    as_fraction = bool(_BARE_FRACTION_RE.match(value or ""))
+    q_nums = _numbers(quote, allow_fractions=as_fraction)
+    s_nums = _numbers(source, allow_fractions=as_fraction)
     return bool(target_keys & q_nums) and bool(target_keys & s_nums)
 
 

@@ -40,16 +40,19 @@ Promotion threshold: **T = 0.70** for both article and person rules.
   (carrying an integer `round`) at the top of each round; absent any
   `round_started` event, `growth_stalled` falls back to `True` and every
   slug reads as `stalled`.
-  The `evidence_added` event is the editor's responsibility to emit per
-  grown slug: `work add evidence --round N` emits it, but `work
-  build-evidence` appends evidence records WITHOUT emitting the event. A
-  slug grown only through `build-evidence` therefore looks permanently
-  stalled (no `evidence_added` ever fires for it) and the WRITE gate
-  never opens. After a `build-evidence` gather, the editor must emit the
-  event for that slug — e.g. `wikify run record-event --type
+  The `evidence_added` event is emitted by the three commands that
+  append evidence: `work add evidence` (which also accepts `--round N`),
+  `work build-evidence`, and `work tend` (the inbox drain). The first two
+  fire on the records they append; `work tend` fires on NET growth,
+  because it dedups later in the same pass and a re-suggested chunk must
+  not reset the timer. A slug grown through any of them advances its
+  growth-stall timer with no follow-up call.
+  Do NOT hand-emit a second event for the same gather: a spurious
+  `evidence_added` resets the timer for a round the slug did not grow
+  and holds the WRITE gate shut. Use `wikify run record-event --type
   evidence_added --concept-id <slug> --run <bundle> --data '{"n": <k>}'`
-  ordered after the round's `round_started` — or the growth-stall timer
-  never advances.
+  (ordered after the round's `round_started`) only for growth that
+  reached the ledger through none of the three.
 
 If any gate fails, `score = 0`, `band` is `new` / `growing` /
 `stalled` depending on `growth_stalled`.

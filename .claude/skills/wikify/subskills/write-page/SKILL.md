@@ -126,16 +126,16 @@ For a deterministic structural pre-check, pipe the candidate JSON into
 echo '<response.json candidate>' | wikify draft check <slug> --run <bundle> --dry-run --format json
 ```
 
-The dry-run reads the candidate from stdin, validates it against the
-on-disk draft, and prints the verdict without writing `response.json`
-or `validation.json`. Fix any errors before persisting.
+The dry-run validates a stdin candidate against the on-disk draft and
+prints the verdict without writing files. Fix every error AND warning.
 
 ## Hard Rules
 
 - Ground every substantive factual claim in the supplied dossier
   (see "Evidence-grounding contract" above). The dossier wins over
   memory whenever the two could disagree.
-- Use `[^eN]` markers and matching `[^eN]:` reference definitions.
+- Use `[^eN]` markers and matching `[^eN]:` reference definitions. `N`
+  is a 1-based INDEX into `evidence`, not a label (`citation-format.md`).
 - Reference quotes must be verbatim substrings of source chunks. The
   quoted sentence should be the one that carries the cited claim, not
   the chunk's leading byline or a generic transition sentence.

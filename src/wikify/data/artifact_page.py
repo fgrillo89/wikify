@@ -44,9 +44,25 @@ def _clean_source_label(s: str) -> str:
     return s
 
 
+def _escape_angle_brackets(text: str) -> str:
+    """Escape ``<``/``>`` so angle-bracket notation survives to the page.
+
+    A subject like ``Average coefficient <c>`` (ASCII for the bracket average
+    ⟨c⟩) passes through markdown as raw inline HTML, so the browser silently
+    DELETES the symbol and the row reads "Average coefficient  in ...".
+    Claim text is data, never markup, so both angles are entity-escaped. Inside
+    a ``$...$`` region this is a no-op: markdown escapes ``<`` there anyway, so
+    KaTeX receives the same ``&lt;`` either way. ``&`` is deliberately left
+    alone so an already-escaped ``&lt;`` is not double-escaped.
+    """
+    return (text or "").replace("<", "&lt;").replace(">", "&gt;")
+
+
 def _escape_cell(text: str) -> str:
     """Make a value safe inside a markdown table cell."""
-    return (text or "").replace("|", "\\|").replace("\n", " ").strip()
+    return _escape_angle_brackets(
+        (text or "").replace("|", "\\|").replace("\n", " ").strip()
+    )
 
 
 def _cell_markdown(col: str, cell) -> str:
@@ -79,13 +95,17 @@ def render_artifact_markdown(table: ConsolidatedTable) -> str:
     lines.append("links: []")
     lines.append("---")
     lines.append("")
-    lines.append(f"# {display_title}")
+    # The H1 carries the same notation a subject does; leaving it raw is the
+    # exact deletion this escaping exists to prevent, in the most visible spot.
+    lines.append(f"# {_escape_angle_brackets(display_title)}")
     lines.append("")
     if table.description:
-        lines.append(table.description.strip())
+        lines.append(_escape_angle_brackets(table.description.strip()))
         lines.append("")
 
-    header = ["Subject", *table.columns]
+    # Column headers are spec-authored property names and can carry the same
+    # angle-bracket notation a subject can, so they escape identically.
+    header = ["Subject", *(_escape_cell(c) for c in table.columns)]
     lines.append("| " + " | ".join(header) + " |")
     lines.append("| " + " | ".join("---" for _ in header) + " |")
     for row in table.rows:
@@ -110,7 +130,8 @@ def render_artifact_markdown(table: ConsolidatedTable) -> str:
         # (chunk suffixes carry no cross-link value — doc_id is what matters).
         raw_id = raw_doc_id if raw_doc_id else ev.get("chunk_id") or ""
         label = _clean_source_label(raw_id) if raw_id else ""
-        locator = ev.get("locator") or ""
+        # Claim-derived like the quote it sits beside ("Table 2, column <c>").
+        locator = _escape_angle_brackets(ev.get("locator") or "")
         # Build the visual label: title[. locator]
         if label and locator:
             visual = f"{label}. {locator}"
@@ -118,7 +139,9 @@ def render_artifact_markdown(table: ConsolidatedTable) -> str:
             visual = label
         else:
             visual = locator
-        quote = ev["quote"].replace("\n", " ").strip()
+        # Claim-derived like every other cell: a quote carrying `<c>` would
+        # otherwise reach the renderer as a raw tag and lose the symbol.
+        quote = _escape_angle_brackets(ev["quote"].replace("\n", " ").strip())
         # When doc_id was stripped, preserve the original doc_id in parentheses
         # so the page parser can recover the full id for cross-page link matching.
         if raw_doc_id and raw_doc_id != label:

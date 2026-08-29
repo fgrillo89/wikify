@@ -20,7 +20,7 @@ import shutil
 import sys
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from html import escape
+from html import escape, unescape
 from pathlib import Path
 from typing import Any, Self
 
@@ -97,10 +97,19 @@ def _doc_key(doc_id: str) -> str:
 
 
 def _plain_excerpt(text: str, limit: int = 200) -> str:
-    """Return a compact plain-text excerpt from markdown-ish prose."""
+    """Return a compact plain-text excerpt from markdown-ish prose.
+
+    Entity references are decoded, because the result is PLAIN TEXT and its
+    consumers escape it themselves. Markdown source legitimately carries
+    ``&lt;`` where a literal ``<`` is meant (data-artifact pages escape
+    claim-derived text so the browser cannot eat it as a tag); leaving the
+    entity in place would let Jinja escape it a second time and surface
+    ``&amp;lt;`` on the index card.
+    """
     text = re.sub(r"\[\^e\d+\]", "", text)
     text = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", text)
     text = re.sub(r"[*_`~]+", "", text)
+    text = unescape(text)
     text = re.sub(r"\s+", " ", text).strip()
     return text[:limit]
 
@@ -526,9 +535,12 @@ def _aggregate_references(
 
 def _reference_sort_key(meta: dict, doc_id: str) -> tuple[str, str]:
     """Surname-then-year sort key. Falls back to doc_id when meta is empty."""
-    authors = meta.get("authors") or []
+    # Skip blank author entries: upstream metadata (e.g. a Crossref thesis
+    # record whose author has neither given nor family name) can carry an
+    # empty string, and ``"".split()[-1]`` would abort the whole render.
+    authors = [a for a in (meta.get("authors") or []) if str(a).strip()]
     if authors:
-        first = str(authors[0])
+        first = str(authors[0]).strip()
         surname = first.split(",", 1)[0] if "," in first else first.split()[-1]
         return (surname.lower(), str(meta.get("year") or ""))
     title = (meta.get("title") or "").strip()
@@ -1976,10 +1988,18 @@ _SEARCH_JS = """\
       return;
     }
     var root = document.documentElement.getAttribute('data-root') || '';
+    // The index carries PLAIN TEXT, and innerHTML is not an escaping boundary
+    // the way Jinja is - a title containing `<c>` would be parsed as a tag and
+    // deleted, and a title containing markup would be executed.
+    function esc(v) {
+      return String(v == null ? '' : v)
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+    }
     results.innerHTML = hits.map(function(h) {
-      return '<a class="search-result" href="' + root + h.url + '">' +
-             '<div class="search-result-title">' + h.title + '</div>' +
-             '<div class="search-result-excerpt">' + (h.excerpt || '') + '</div></a>';
+      return '<a class="search-result" href="' + esc(root + h.url) + '">' +
+             '<div class="search-result-title">' + esc(h.title) + '</div>' +
+             '<div class="search-result-excerpt">' + esc(h.excerpt || '') + '</div></a>';
     }).join('');
     results.style.display = 'block';
   }

@@ -36,9 +36,28 @@ in math delimiters when the evidence contains them:
   `$\text{Ge}_2\text{Sb}_2\text{Te}_5$`;
 - chemical reactions with mhchem when needed: `$\ce{Hf + 2 H2O -> HfO2 + 2 H2}$`.
 
+Inline maths counts as much as display maths. EVERY mathematical
+symbol, subscript, superscript, and relation in running prose must be
+delimited, not just the equations that sit on their own line: write
+`$\sigma_D$`, not `σ_D` or `sigma_D`; `$G_{i,j} \approx (t_i -
+t_j)^{-\beta}$`, not `G_{i,j} ≈ (t_i − t_j)^(−β)`. Undelimited notation
+renders as literal text, and an article with zero inline `$...$` is
+almost always wrong.
+
+Never paste a Unicode maths character. Greek letters and operators
+(`σ β δ α λ ≈ ∝ ∼ ≤ ≥ ≠ − × ⟨ ⟩`) go in as LaTeX commands inside a math
+region — `$\sigma$`, `$\approx$`, `$\propto$`, `$\langle c \rangle$` —
+never as the raw character. A bare `<c>` for ⟨c⟩ is worse: markdown eats
+it as an HTML tag and the symbol vanishes from the page.
+
+`wikify draft check` reports an `undelimited_math` warning counting every
+symbol left outside a math region (verbatim quotations, fenced code, and
+the `## References` block are exempt). It does not block the commit; fix
+the count to zero anyway.
+
 Do not invent equations. If the quoted evidence does not contain a
-formula, do not introduce one. Plain unit strings such as `100 nm` or
-`1.8 V` should remain plain text, not math.
+formula, do not introduce one. Plain unit strings such as `100 nm`,
+`5 µs`, or `1.8 V` should remain plain text, not math.
 
 `response.json` is JSON, so every backslash inside a math region must
 be doubled. Write `"$\\Delta G = \\Delta H - T\\,\\Delta S$"` in the

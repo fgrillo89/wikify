@@ -22,6 +22,20 @@ Common event types include:
 - `inbox_consolidated`
 - `budget_exceeded`
 - `run_closed`
+- `page_recall_cleared`
+- `editor_ruling`
+
+`page_recall_cleared` records that a slug passed (or was excused from) the
+evidence-recall gate; `draft finalize --require-recall` refuses to commit an
+article without a FRESH one. Payload carries `recall_ok` or `exhausted`.
+
+`editor_ruling` records a deliberate editor decision that overrides or
+accepts a non-blocking signal, so the choice is auditable rather than
+invisible: shipping a page on genuinely thin evidence rather than padding it
+with fabricated attribution, or falling back to relevance-based seeding when
+`degenerate_metrics` shows the PageRank ranking carries no signal. Carry a
+`ruling` key plus whatever made the call (`{"ruling": "thin_evidence",
+"n_docs": 3, "reason": "..."}`).
 
 Cost is computed from `call` events. If a fact is needed for replay or
 comparison, it belongs in the event ledger.

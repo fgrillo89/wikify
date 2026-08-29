@@ -33,7 +33,13 @@ from .card import (
 )
 from .chunk_ids import build_suffix_index, corpus_path_from_bundle, resolve_chunk_id
 from .claim import expire_stale_claims, list_claims
-from .evidence import EvidenceRecord, append_evidence, dedup_evidence, read_evidence
+from .evidence import (
+    EvidenceRecord,
+    append_evidence,
+    dedup_evidence,
+    read_evidence,
+    seen_chunk_ids,
+)
 from .inbox import (
     append_inbox_records,
     list_inbox_files,
@@ -68,9 +74,75 @@ def _consolidate_evidence_suggestions(bundle: Bundle) -> int:
         card = load_card(bundle, slug)
         if not card.front:
             continue
-        appended += append_evidence(bundle, slug, recs)
+        # NET growth, not the raw append count. ``append_evidence`` does not
+        # dedup and ``tend_bundle`` runs ``dedup_evidence`` later in the same
+        # pass, so an inbox record re-suggesting a chunk already in the ledger
+        # appends and is then removed - emitting on the raw count would clear
+        # the growth-stall gate for a round the evidence set did not change.
+        before = seen_chunk_ids(bundle, slug)
+        n = append_evidence(bundle, slug, recs)
+        appended += n
+        # The growth-stall maturity gate keys off ``evidence_added``. This is
+        # the third path that appends evidence (alongside ``work add
+        # evidence`` and ``work build-evidence``), so it must emit too or a
+        # slug grown only by an inbox drain reads as permanently stalled.
+        _emit_evidence_added(bundle, slug, len(seen_chunk_ids(bundle, slug) - before))
     truncate_inbox(bundle, "evidence_suggestions")
     return appended
+
+
+class GrowthEventNotRecordedError(RuntimeError):
+    """An evidence append landed but its ``evidence_added`` event did not.
+
+    Raised rather than swallowed because the failure direction is dangerous:
+    on the ARTICLE path ``compute_maturity`` treats ``growth_stalled`` as a
+    gate that must be True to reach ``ready``, so a MISSING event promotes a
+    slug that just grew instead of holding it back. (The person path gates on
+    other components, but its ledger is wrong either way.)
+    """
+
+    def __init__(self, slug: str, n: int, cause: Exception) -> None:
+        super().__init__(
+            f"drained {n} evidence record(s) into {slug!r} but could not record "
+            f"the evidence_added event ({cause}). The growth-stall gate reads a "
+            f"missing event as a PASS, so the slug would become writable without "
+            f"settling. Repair with `wikify run record-event --type "
+            f'evidence_added --concept-id {slug} --data \'{{"n": {n}}}\'`.'
+        )
+        self.slug = slug
+        self.n = n
+
+
+def _emit_evidence_added(bundle: Bundle, slug: str, n: int) -> None:
+    """Record the growth event. Raises when it cannot be recorded.
+
+    Not best-effort: see :class:`GrowthEventNotRecordedError` for why losing
+    this event opens the write gate rather than closing it.
+    """
+    if n <= 0:
+        return
+    from ..run.events import Event, append_event
+    from ..run.state import load_state
+
+    try:
+        run_id = load_state(bundle).run_id
+    except FileNotFoundError:
+        # No run was ever initialised here, so there is no event ledger and no
+        # maturity gate reading one. Nothing to record and nothing at risk.
+        return
+    try:
+        append_event(
+            bundle,
+            Event(
+                run_id=run_id,
+                type="evidence_added",
+                actor="tend",
+                concept_id=slug,
+                data={"n": n, "source": "tend"},
+            ),
+        )
+    except Exception as exc:  # noqa: BLE001 - re-raised as a typed error
+        raise GrowthEventNotRecordedError(slug, n, exc) from exc
 
 
 # An automated gap suggestion is promoted to a concept folder only once it is

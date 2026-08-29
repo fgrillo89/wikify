@@ -208,6 +208,73 @@ def test_build_draft_with_adjacent_populates_context_window(tmp_path: Path) -> N
     assert "[prev" not in ev.context_window
 
 
+def test_adjacent_window_flags_uncitable_equation_and_table(tmp_path: Path) -> None:
+    """Relevance-ranked retrieval favours prose that DESCRIBES a result
+    over the equation or table that STATES it, so the key formula or fitted
+    coefficient lands in the chunk ADJACENT to the selected one — readable via
+    --with-adjacent, but the citation rule forbids quoting it. Surface it so
+    the editor promotes the neighbour instead of a writer burning a run."""
+    import sqlite3
+
+    bundle, corpus, slug = _bundle_with_concept(tmp_path)
+    append_evidence(
+        bundle, slug,
+        [EvidenceRecord(chunk_id="paper_0__c0000", doc_id="paper_0")],
+    )
+    # The trailing neighbour (c0001) carries the equation the cited chunk only
+    # refers to.
+    con = sqlite3.connect(str(corpus.sqlite_path))
+    try:
+        con.execute(
+            "INSERT OR REPLACE INTO assets"
+            "(asset_id, doc_id, asset_type, ord, content) VALUES"
+            "('paper_0/eq1', 'paper_0', 'equation', 0, 'I(Q) = c Q^{\\\\delta}')"
+        )
+        con.execute(
+            "INSERT OR IGNORE INTO chunk_assets(chunk_id, asset_id, relation) "
+            "VALUES ('paper_0__c0001', 'paper_0/eq1', 'near')"
+        )
+        con.commit()
+    finally:
+        con.close()
+
+    # Without adjacent context there is nothing to promote and nothing to say.
+    plain = build_draft(
+        bundle, slug=slug, corpus=corpus,
+        model_id="claude-sonnet-4-6", tier="M", with_adjacent=False,
+    )
+    assert plain.evidence[0].context_window_assets == []
+
+    flagged = build_draft(
+        bundle, slug=slug, corpus=corpus,
+        model_id="claude-sonnet-4-6", tier="M", with_adjacent=True,
+    )
+    assert flagged.evidence[0].context_window_assets == ["equation"]
+
+    # A table-typed neighbour is flagged the same way, and both signals stack.
+    con = sqlite3.connect(str(corpus.sqlite_path))
+    try:
+        con.execute(
+            "UPDATE chunks SET section_type = 'table' "
+            "WHERE chunk_id = 'paper_0__c0001'"
+        )
+        con.commit()
+    finally:
+        con.close()
+    both = build_draft(
+        bundle, slug=slug, corpus=corpus,
+        model_id="claude-sonnet-4-6", tier="M", with_adjacent=True,
+    )
+    assert both.evidence[0].context_window_assets == ["equation", "table"]
+
+    # The dossier warns the writer that the adjacent content is NOT citable.
+    from wikify.bundle.draft.dossier import render_dossier
+
+    dossier = render_dossier(both)
+    assert "NOT CITABLE — promote first" in dossier
+    assert "equation/table" in dossier
+
+
 def test_build_draft_only_active_evidence(tmp_path: Path) -> None:
     """Archived evidence records do not enter the draft."""
     bundle, corpus, slug = _bundle_with_concept(tmp_path)

@@ -82,6 +82,40 @@ handful of rows that happened to fall in the rounds' doc slices.
   `any` (include unverified / figure-digitized — use sparingly and only when
   the page makes the provenance explicit).
 
+**Symbols go in as inline LaTeX — in `description` as well as in the
+labels.** The data page typesets `$...$` with KaTeX, so a symbolic column
+name or a `description` mentioning a symbol must be delimited:
+`"description": "Fitted $\\delta$ in $I(Q) = c\\,Q^\\delta$ across
+studies."`, not `"Fitted delta in I(Q)=c*Q^delta"`. The `description` is
+a separate field from the row/column labels and is easy to miss on a
+first pass. Never paste a Unicode maths character, and write ⟨c⟩ as
+`$\\langle c \\rangle$` rather than `<c>` (raw angle brackets are escaped,
+so `<c>` reaches the page as a literal `<c>`); the spec is JSON, so every
+backslash is doubled. Row labels come from each claim's stored `subject` — fix a
+mis-labelled one with `wikify data relabel <claim_id> --subject '<new>'
+--run <bundle>` rather than editing `claims.db` directly.
+
+**Read `missing_subjects` on every result.** A subjects filter is checked
+per subject: any spec subject that matches no stored claim is listed there,
+and a DRAFT build still renders from the ones that do resolve. Only a filter
+where NO subject matches anything raises `subjects_filter_unmatched`.
+Publishing is stricter. `consolidate --commit`, `data commit` and `data
+rebuild` all refuse when the spec no longer resolves: a subject matching no
+stored claim (`missing_subjects`), a NAMED subject contributing no row
+(`subjects_without_rows`), a property contributing no cell
+(`properties_without_cells`), or a zero-row table. They do NOT compare against
+the published page, so a narrowing caused by real evidence movement — a new
+conflicting paper, or a subject the spec does not name losing its last verified
+claim — publishes normally. That is the evolving-artifact property. If it fires on a spelling you can see in
+`data list`, the stored `subject_norm` keys are stale: run `wikify data
+reindex --run <bundle>`.
+
+A subject that DOES exist but whose property is not harvested yet, or whose
+claims are all below `min_verification`, is not a `missing_subjects` error: a
+DRAFT build renders it as an empty row-set and reports what it can in
+`empty_columns`. Publishing that state is refused, because shipping it would
+put a blank column or a dropped row on the page.
+
 ## Build and commit
 
 Build, persist the spec, and write the wiki page + sidecar in one step. Pass
@@ -120,6 +154,16 @@ wikify data rebuild --run <bundle>
 `rebuild` re-derives each committed artifact's page (pass an `artifact_id` to
 target one). Run it in the finalize step and on any re-entry so each table
 reflects the current claim store.
+
+**Check `skipped`.** An artifact whose spec subjects no longer resolve is
+skipped rather than aborting the sweep — aborting would leave the artifacts
+already rebuilt in that run written to disk while the rest kept stale pages.
+`rebuild` returns `{"ok": <no skips>, "rebuilt": [...], "skipped":
+[{artifact_id, error, message, ...}]}` — each skip carries the detail field its
+`error` implies (`missing_subjects`, `subjects_without_rows`, `empty_columns`,
+or none) — and **exits non-zero when anything was skipped**: a run that published nothing must not be
+indistinguishable from a clean one. A non-empty `skipped` means those pages
+are STALE: fix the spec or run `wikify data reindex`, then rebuild again.
 
 ## Data artifacts are a separate layer from the wiki graph
 

@@ -105,6 +105,22 @@ Rules:
   carry their own units.
 - **`subject` is the material/system the number describes** (e.g. "Al2O3
   film", "Pt/HfO2/TiN stack"), not the page being written.
+- **Write symbols in `subject` as inline LaTeX.** The subject becomes a
+  row label on a rendered data page, which typesets `$...$` with KaTeX.
+  A symbolic subject goes in delimited — `$\sigma_D$`, `$Q_\nu$`,
+  `$I(Q) = c\,Q^\delta$`, `$\langle c \rangle$` — never as ASCII
+  transliteration (`sigma_D`, `Q_nu`, `I(Q)=c*Q^delta`) and never as a
+  bare Unicode character or `<c>` (the renderer escapes raw angle
+  brackets, so `<c>` reaches the page as a literal `<c>` rather than as
+  the bracket average it stands for). This is the LABEL only; the
+  `value`/`value_original`/`grounding_quote` fields stay exactly as
+  printed in the source, because the verification gate matches them
+  literally.
+- To fix a label on an already-stored claim without re-extracting and
+  re-verifying it: `wikify data relabel <claim_id> --subject '<new>'
+  [--property '<new>'] --run <bundle>`. It rewrites the label and its
+  derived norm keys, leaving the value, provenance, and verification
+  status untouched.
 
 ## Figures
 

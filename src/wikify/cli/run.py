@@ -282,6 +282,25 @@ def cmd_sense(
             n_notable_authors = 0
         finally:
             _con.close()
+    # Ranking metrics that carry no signal (nearly every node tied). The SEED
+    # instruction is "top-K uncovered PageRank docs"; with an unresolved
+    # citation graph that silently degrades to alphabetical order, so the
+    # editor must be told to seed on relevance instead.
+    degenerate_metrics: list[dict] = []
+    if corpus.sqlite_path.exists():
+        from ..corpus.queries import degenerate_ranking_metrics
+        from ..corpus.store.routing import open_store
+
+        try:
+            _store = open_store(corpus.root)
+        except FileNotFoundError:
+            _store = None
+        if _store is not None:
+            try:
+                degenerate_metrics = degenerate_ranking_metrics(_store.con)
+            finally:
+                _store.close()
+
     sizing = _sizing_knobs(n_docs, n_chunks, n_notable_authors)
     active_concepts = sum(
         v for k, v in bands.items() if k not in ("dropped", "parked")
@@ -333,6 +352,7 @@ def cmd_sense(
             "n_people": n_people,
         },
         "waves": waves,
+        "degenerate_metrics": degenerate_metrics,
         "committed_pages": committed_pages,
     }
     typer.echo(json.dumps(snapshot, ensure_ascii=False))

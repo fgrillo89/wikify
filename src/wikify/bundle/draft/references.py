@@ -17,10 +17,86 @@ from .schema import WriteRequest
 
 _REFERENCES_HEADING_RE = re.compile(r"(?im)^##\s+References\s*$")
 _PROSE_MARKER_RE = re.compile(r"\[\^e(\d+)\]")
-_REF_DEF_RE = re.compile(
-    r'^\[\^e(\d+)\]:\s*(?P<body>.*?)\s*>\s*"(?P<quote>.+?)"\s*$',
-    re.MULTILINE,
+# A definition STARTS at a line beginning with ``[^eN]:``. Parsing is done in
+# two stages — find the starts, then parse each block between them — rather
+# than with one multi-line regex over the whole body.
+#
+# That structure is the point. A single regex with DOTALL lets a malformed
+# definition (no ``> "quote"`` tail, or an odd number of quote characters)
+# run past its own line and swallow every definition after it, until it finds
+# some closing quote further down. Both the validator and the normalizer read
+# these definitions, so they would go blind together and AGREE while both were
+# wrong: the check would report nothing and normalization would then rewrite
+# the swallowed definitions from the marker index — silently repointing the
+# very citations the mismatch check exists to catch. Block-bounded parsing
+# confines a malformed definition to its own block.
+_REF_DEF_START_RE = re.compile(r"^\[\^e(\d+)\]:", re.MULTILINE)
+# Within one block: an optional body, then the ``> "quote"`` tail. Anchored at
+# the block start (``\A``) and closing at the FIRST line end that follows a
+# quote character. A block can carry trailing content (a following heading, a
+# blank line, prose that itself ends in a quote), so the quote must be
+# non-greedy: a greedy one runs past its own line and swallows that trailing
+# text, which then fails the grounding check on a page that is correct.
+_REF_DEF_BODY_RE = re.compile(
+    r'\A(?P<body>.*?)\s*>\s*"(?P<quote>.+?)"\s*$', re.DOTALL | re.MULTILINE
 )
+
+
+def iter_ref_defs(body: str):
+    """Yield ``(index, block_text)`` for every ``[^eN]:`` definition.
+
+    ``index`` is 0-based (``[^e1]`` -> 0). The block runs to the next
+    definition start or the end of the body, so a malformed definition cannot
+    consume its successors.
+    """
+    starts = list(_REF_DEF_START_RE.finditer(body))
+    for i, m in enumerate(starts):
+        end = starts[i + 1].start() if i + 1 < len(starts) else len(body)
+        yield int(m.group(1)) - 1, body[m.end():end].strip()
+
+
+def parse_ref_defs(body: str) -> dict[int, tuple[str, str]]:
+    """``{index: (definition_body, quote)}`` for well-formed definitions.
+
+    A block with no parsable ``> "quote"`` tail is omitted — it is malformed,
+    not a definition of something else.
+    """
+    out: dict[int, tuple[str, str]] = {}
+    for idx, block in iter_ref_defs(body):
+        m = _REF_DEF_BODY_RE.match(block)
+        if m:
+            out[idx] = (m.group("body").strip(), m.group("quote"))
+    return out
+
+
+def parse_ref_chunk_ids(body: str) -> dict[int, str]:
+    """Map each ``[^eN]:`` definition to the chunk id it names.
+
+    The chunk id is the first whitespace-delimited token of the definition
+    body. Definitions whose body is empty or does not start with a bare id
+    token are omitted; callers treat a missing entry as "not asserted".
+    """
+    out: dict[int, str] = {}
+    for idx, (def_body, _quote) in parse_ref_defs(body).items():
+        head = def_body.split(maxsplit=1)
+        if head and not head[0].startswith("("):
+            out[idx] = head[0]
+    return out
+
+
+def evidence_indices_by_chunk_id(evidence) -> dict[str, list[int]]:
+    """``{chunk_id: [every index holding it]}``.
+
+    All indices, not the last: a chunk gathered twice is a normal state
+    (``append_evidence`` does not dedup; ``dedup_evidence`` is a separate pass
+    only ``work tend`` runs), and a last-wins map makes a correct marker
+    pointing at the first occurrence look like a mismatch with the second.
+    """
+    out: dict[str, list[int]] = {}
+    for i, ev in enumerate(evidence):
+        if ev.chunk_id:
+            out.setdefault(ev.chunk_id, []).append(i)
+    return out
 
 
 @dataclass(frozen=True)
@@ -39,7 +115,36 @@ def _split_references(body: str) -> tuple[str, str]:
 
 
 def _parse_existing_quotes(refs_body: str) -> dict[int, str]:
-    return {int(m.group(1)) - 1: m.group("quote") for m in _REF_DEF_RE.finditer(refs_body)}
+    return {idx: quote for idx, (_body, quote) in parse_ref_defs(refs_body).items()}
+
+
+def _assert_markers_match_evidence(body: str, draft: WriteRequest) -> None:
+    """Refuse to normalize when a footnote names a different evidence entry.
+
+    Normalization REWRITES every definition from the marker index, so a marker
+    numbered by hand rather than by position silently acquires a well-formed
+    citation pointing at the wrong source - and the grounding check that runs
+    afterwards sees only the rewritten, self-consistent result. Fail here
+    instead, while the writer's own chunk id is still on the page.
+
+    Scans the WHOLE body through the shared parser, not just the text after
+    the ``## References`` heading: a definition this misses is a definition
+    normalization repoints unchecked, and ``draft check`` must reach the same
+    verdict on the same input.
+    """
+    by_chunk_id = evidence_indices_by_chunk_id(draft.evidence)
+    for idx, chunk_id in parse_ref_chunk_ids(body).items():
+        named = by_chunk_id.get(chunk_id)
+        if not named or idx in named or not (0 <= idx < len(draft.evidence)):
+            continue
+        wanted = ", ".join(f"e{i + 1}" for i in named)
+        raise ValueError(
+            f"marker 'e{idx + 1}' resolves POSITIONALLY to evidence[{idx}] "
+            f"({draft.evidence[idx].chunk_id}), but its definition names "
+            f"{chunk_id}, which is evidence[{named[0]}] - renumber the marker "
+            f"to {wanted} (markers are 1-based indices into draft.json's "
+            "evidence array, not free labels)"
+        )
 
 
 def _quote_from_chunk(chunk_text: str) -> str:
@@ -99,6 +204,7 @@ def normalize_response_references(bundle: Bundle, slug: str) -> ReferenceNormali
         raise ValueError("response.body_markdown must be a string")
 
     prose_body, refs_body = _split_references(body)
+    _assert_markers_match_evidence(body, draft)
     marker_indexes = sorted({int(m.group(1)) - 1 for m in _PROSE_MARKER_RE.finditer(prose_body)})
     existing_quotes = _parse_existing_quotes(refs_body)
 

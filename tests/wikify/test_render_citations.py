@@ -140,7 +140,7 @@ _DATA_BODY = (
 
 
 def test_data_kind_preserves_all_footnotes():
-    """kind='data' must not collapse or drop any footnote definitions."""
+    """Kind='data' must not collapse or drop any footnote definitions."""
     result = _clean_evidence_lines(_DATA_BODY, kind="data")
     # All three definitions must survive unchanged.
     assert "[^d1]:" in result
@@ -149,7 +149,7 @@ def test_data_kind_preserves_all_footnotes():
 
 
 def test_data_kind_preserves_quotes():
-    """kind='data' must keep the per-cell grounding quote on each footnote."""
+    """Kind='data' must keep the per-cell grounding quote on each footnote."""
     result = _clean_evidence_lines(_DATA_BODY, kind="data")
     assert "TiO2 thickness = 5 nm" in result
     assert "Al2O3 thickness = 3 nm" in result
@@ -199,7 +199,7 @@ def test_data_kind_renders_cs1_hyperlink_with_metadata():
 
 
 def test_article_kind_collapses_same_paper():
-    """kind='article' (default) still collapses same-paper markers."""
+    """Kind='article' (default) still collapses same-paper markers."""
     # Two markers pointing to the same doc_id; only one should survive.
     body = (
         "First claim.[^e1] Second claim.[^e2]\n"
@@ -263,3 +263,41 @@ def test_default_kind_is_article():
     lines = result.split("\n")
     def_lines = [ln for ln in lines if ln.startswith("[^") and "]:" in ln]
     assert len(def_lines) == 1
+
+
+# ---------------------------------------------------------------------------
+# A blank author string must not abort the whole render
+# ---------------------------------------------------------------------------
+
+
+def test_reference_sort_key_survives_blank_author():
+    """Regression: A Crossref record whose author carries neither `given` nor
+    `family` yields ``authors: [""]``. ``"".split()[-1]`` raised IndexError and
+    killed the entire multi-page render at the reference-aggregation step."""
+    from wikify.render.html.render import _reference_sort_key
+
+    # Blank-only author list falls back to the title, then the doc_id.
+    assert _reference_sort_key({"authors": [""], "title": "A Thesis"}, "doc_x") == (
+        "a thesis",
+        "",
+    )
+    assert _reference_sort_key({"authors": ["   "]}, "Doc_X") == ("doc_x", "")
+    # A blank entry ahead of a real one does not shadow the real surname.
+    assert _reference_sort_key(
+        {"authors": ["", "Jane Doe"], "year": 2011}, "doc_x"
+    ) == ("doe", "2011")
+    # Ordinary paths are unchanged.
+    assert _reference_sort_key({"authors": ["Doe, Jane"], "year": 1998}, "d") == (
+        "doe",
+        "1998",
+    )
+
+
+def test_format_cs1_survives_blank_author():
+    """The CS1 formatter is the other consumer of ``meta['authors']``; a list
+    of blank strings must degrade to a title-only citation, not raise."""
+    from wikify.render.html.citation import format_cs1
+
+    assert format_cs1({"authors": ["", "  "], "title": "A Thesis", "year": 2011}) == (
+        '(2011). "A Thesis".'
+    )

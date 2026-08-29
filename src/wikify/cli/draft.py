@@ -120,23 +120,60 @@ def cmd_build(
     except FileNotFoundError as exc:
         cli_error(EXIT_VALIDATION, error="concept_not_found", message=str(exc))
     p = draft_path(bundle, concept)
-    dropped_empty = read_json(p).get("dropped_empty_evidence", 0)
+    payload = read_json(p)
+    dropped_empty = payload.get("dropped_empty_evidence", 0)
+    remap = payload.get("marker_remap")
+    # Records whose adjacent window holds an equation/table the cited chunk
+    # only refers to — a promotion candidate, not something a writer may quote.
+    promote = [
+        {"marker": f"e{i + 1}", "chunk_id": ev.chunk_id,
+         "assets": ev.context_window_assets,
+         # The ids to feed `work build-evidence --from-ids`. Reporting only
+         # the cited chunk would name the problem without naming the fix.
+         "promote_chunk_ids": ev.promotable_chunk_ids}
+        for i, ev in enumerate(request.evidence)
+        if ev.context_window_assets
+    ]
     if fmt == "json":
-        typer.echo(
-            json.dumps(
-                {
-                    "ok": True,
-                    "draft_path": str(p),
-                    "page_id": request.page_id,
-                    "evidence_count": len(request.evidence),
-                    "dropped_empty_evidence": dropped_empty,
-                }
-            )
-        )
+        out = {
+            "ok": True,
+            "draft_path": str(p),
+            "page_id": request.page_id,
+            "evidence_count": len(request.evidence),
+            "dropped_empty_evidence": dropped_empty,
+            "promotion_candidates": promote,
+        }
+        if remap is not None:
+            out["marker_remap"] = remap
+        typer.echo(json.dumps(out))
         return
     typer.echo(f"draft:    {p}")
     if dropped_empty:
         typer.echo(f"warning:  dropped {dropped_empty} empty-body evidence record(s)")
+    if remap is not None and not remap["stable"]:
+        # `[^eN]` is positional, so any reorder/drop repoints later markers.
+        if remap.get("source") == "none":
+            typer.echo(
+                "warning:  no marker baseline available (page not committed and "
+                "no prior draft); marker stability is UNKNOWN. Re-derive every "
+                "marker from the dossier's Marker index."
+            )
+        else:
+            moved = ", ".join(f"{a}->{b}" for a, b in sorted(remap["moved"].items()))
+            typer.echo(
+                f"warning:  evidence indices moved since the last build; "
+                f"markers must be re-derived. moved: {moved or '(none)'}  "
+                f"dropped: {', '.join(remap['dropped']) or '(none)'}"
+            )
+    if promote:
+        listed = ", ".join(
+            c["marker"] + ":" + "/".join(c["assets"]) for c in promote[:6]
+        )
+        typer.echo(
+            f"warning:  {len(promote)} evidence record(s) have an "
+            "equation/table in the ADJACENT window that the cited chunk only "
+            f"refers to; promote the neighbour before dispatching a writer ({listed})"
+        )
     typer.echo(f"page_id:  {request.page_id}")
     typer.echo(f"evidence: {len(request.evidence)} chunks")
 
@@ -302,6 +339,12 @@ def cmd_check(
             typer.echo(f"errors:    {len(verdict['errors'])}")
             for e in verdict["errors"][:10]:
                 typer.echo(f"  [{e.get('code')}] {e.get('path')}: {e.get('message')}")
+        # Warnings do not gate the commit, but they are invisible in text mode
+        # unless printed — which is how a quality signal goes unacted-on.
+        if verdict.get("warnings"):
+            typer.echo(f"warnings:  {len(verdict['warnings'])}")
+            for w in verdict["warnings"][:10]:
+                typer.echo(f"  [{w.get('code')}] {w.get('path')}: {w.get('message')}")
     if not verdict["ok"]:
         raise typer.Exit(code=EXIT_VALIDATION)
 

@@ -55,6 +55,10 @@ EventType = Literal[
     "page_embedding_failed",
     "data_page_collision_skipped",
     "page_recall_cleared",
+    # A deliberate, auditable editor decision that overrides or accepts a
+    # non-blocking signal (e.g. shipping a page on genuinely thin evidence
+    # rather than padding it). Payload is free-form; carry a `ruling` key.
+    "editor_ruling",
 ]
 
 

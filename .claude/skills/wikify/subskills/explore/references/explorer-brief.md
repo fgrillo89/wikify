@@ -404,9 +404,10 @@ per slug. Non-negotiable:
   chunk_id. `< 6` accepts: do NOT commit; surface `stop_reason:
   "pool_exhausted"`. (The explore direct-accept path commits via `work
   add evidence --records` instead; see Shared mechanics.)
-- **`build-evidence` does NOT emit `evidence_added`.** Surface every
-  committed slug in the envelope so the editor emits the event (else the
-  growth-stall maturity gate never advances).
+- **`build-evidence` self-emits `evidence_added`** when it appends at
+  least one record, so the growth-stall maturity gate advances on its
+  own. Do NOT emit a second event for the same gather. Still surface
+  every committed slug in the envelope so the editor can account for it.
 - Scratch files go to temp (`$TEMP` / `<run>/scratch/`), NEVER to `src/`,
   `.claude/`, or any project source dir.
 

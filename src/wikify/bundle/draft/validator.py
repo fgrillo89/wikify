@@ -41,6 +41,11 @@ from .artifact import (
     validation_path,
     write_json,
 )
+from .references import (
+    evidence_indices_by_chunk_id,
+    parse_ref_chunk_ids,
+    parse_ref_defs,
+)
 from .schema import (
     QuoteNotInChunkError,
     WriteRequest,
@@ -52,10 +57,10 @@ from .schema import (
 VALIDATION_SCHEMA_VERSION = 1
 
 
-_REF_DEF_RE = re.compile(
-    r'^\[\^e(\d+)\]:\s*(?P<body>.*?)\s*>\s*"(?P<quote>.+?)"\s*$',
-    re.MULTILINE | re.DOTALL,
-)
+# The reference-definition parse is SHARED with ``normalize_response_references``
+# (which rewrites definitions from the marker index). Two copies drifted apart
+# once already, and a definition one side cannot see is one the other silently
+# repoints.
 _PROSE_MARKER_RE = re.compile(r"\[\^e(\d+)\]")
 
 # Grounding-match normalization is shared with the data-harvest verifier
@@ -101,10 +106,7 @@ def _pydantic_errors(exc: ValidationError) -> list[dict]:
 
 
 def _parse_ref_quotes(body: str) -> dict[int, str]:
-    out: dict[int, str] = {}
-    for m in _REF_DEF_RE.finditer(body):
-        out[int(m.group(1)) - 1] = m.group("quote")
-    return out
+    return {idx: quote for idx, (_body, quote) in parse_ref_defs(body).items()}
 
 
 def _parse_prose_markers(body: str) -> set[int]:
@@ -121,6 +123,74 @@ def _marker_to_index(marker: str) -> int | None:
         return None
 
 
+def _marker_mismatch_error(
+    idx: int, draft: WriteRequest, ref_chunk_id: str, body_quote: str
+) -> dict | None:
+    """Flag a citation whose marker index selects the wrong evidence entry.
+
+    ``[^eN]`` resolves POSITIONALLY to ``draft.evidence[N-1]``. A writer that
+    numbers markers freely (by order of first use in prose, say) produces a
+    footnote that names one chunk while the marker points at another. The
+    generic ``quote_not_in_source`` check misses this whenever the quote also
+    happens to occur in the entry the marker landed on — overlapping chunks
+    from one paper make that common — and ``normalize-references`` then
+    REWRITES the footnote from the marker index, so the wrong-source citation
+    ends up looking perfectly well-formed.
+
+    Two independent signals, in order of reliability:
+
+    1. The footnote names a chunk id that belongs to a DIFFERENT evidence
+       entry. Deterministic; catches the case even when both entries contain
+       the quote.
+    2. No usable chunk id, but the quote grounds in exactly one OTHER entry
+       and not in the selected one. Reports the intended index instead of the
+       generic "fabricated or corrupted citation".
+    """
+    marker = f"e{idx + 1}"
+    selected = draft.evidence[idx]
+    if ref_chunk_id and ref_chunk_id != selected.chunk_id:
+        # Shared with the normalizer's assert so both reach the same verdict on
+        # duplicates (a chunk gathered twice occupies several indices).
+        named = evidence_indices_by_chunk_id(draft.evidence).get(ref_chunk_id)
+        if named:
+            wanted = ", ".join(f"e{i + 1}" for i in named)
+            return {
+                "path": f"body_markdown/[^{marker}]",
+                "code": "marker_evidence_mismatch",
+                "message": (
+                    f"marker {marker!r} resolves POSITIONALLY to evidence"
+                    f"[{idx}] ({selected.chunk_id}), but its `[^{marker}]:` "
+                    f"definition names {ref_chunk_id}, which is evidence"
+                    f"[{named[0]}] - renumber the marker to "
+                    f"{wanted} (markers are 1-based indices into "
+                    "draft.json's evidence array, not free labels)"
+                ),
+            }
+    if ref_chunk_id or not body_quote:
+        return None
+    if _quote_is_grounded(body_quote, selected.chunk_text or ""):
+        return None
+    grounded_in = [
+        i
+        for i, ev in enumerate(draft.evidence)
+        if i != idx and _quote_is_grounded(body_quote, ev.chunk_text or "")
+    ]
+    if len(grounded_in) != 1:
+        return None
+    other = grounded_in[0]
+    return {
+        "path": f"body_markdown/[^{marker}]",
+        "code": "marker_evidence_mismatch",
+        "message": (
+            f"marker {marker!r} resolves POSITIONALLY to evidence[{idx}], "
+            f"whose chunk does not contain the quote; the quote is verbatim "
+            f"in evidence[{other}] - renumber the marker to e{other + 1} "
+            "(markers are 1-based indices into draft.json's evidence array, "
+            "not free labels)"
+        ),
+    }
+
+
 def _quote_grounding_errors(
     draft: WriteRequest, response: WriteResponse
 ) -> list[dict]:
@@ -132,6 +202,7 @@ def _quote_grounding_errors(
     and ``used_markers`` must match the prose markers exactly.
     """
     body_quotes = _parse_ref_quotes(response.body_markdown)
+    ref_chunk_ids = parse_ref_chunk_ids(response.body_markdown)
     prose_markers = _parse_prose_markers(response.body_markdown)
     declared_markers = {
         idx
@@ -212,6 +283,15 @@ def _quote_grounding_errors(
                     ),
                 }
             )
+            continue
+        # A wrong marker number is checked BEFORE grounding: the quote can be
+        # verbatim in the entry the marker landed on and still cite the wrong
+        # source, which the grounding check alone cannot distinguish.
+        mismatch = _marker_mismatch_error(
+            idx, draft, ref_chunk_ids.get(idx, ""), body_quote
+        )
+        if mismatch is not None:
+            errors.append(mismatch)
             continue
         if not _quote_is_grounded(body_quote, chunk_text):
             errors.append(
@@ -373,6 +453,100 @@ def _evidence_coverage_findings(
     ]
 
 
+# --- Undelimited maths (presentation warning) ------------------------------
+# The renderer typesets `$...$` / `$$...$$` / `\(...\)` / `\[...\]` with KaTeX.
+# Writers reliably delimit DISPLAY equations but write inline symbols and
+# relations as bare prose (`G_{i,j} ~ (t_i - t_j)^(-b)`, `sigma_D`, `Q^(-5/2)`,
+# and pasted Unicode `σ β ≈ ∝ −`), which renders as literal gibberish. This is
+# presentation, not correctness, so it warns rather than blocking the commit.
+
+# Spans whose contents are not prose and must not be scanned: fenced code,
+# every math delimiter pair, inline code, and inline quotations (a verbatim
+# quote reproduces the source's own notation and is not the writer's to fix).
+#
+# Two alternatives are deliberately narrow, because a greedy version of either
+# masks ordinary prose and silences the whole detector:
+#
+# - Inline `$...$` requires the opening `$` not to be followed by whitespace
+#   OR A DIGIT, and the span to contain a maths character (`\\`, `_`, `^`,
+#   `{`). Both conditions are needed. Two currency amounts on one line ("a $10
+#   million order moves the price by sigma_D, while a $5 million order...")
+#   otherwise pair into a fake math span that blanks everything between them,
+#   and the maths-char test alone does not stop it -- the subscript the
+#   detector is hunting for is itself the maths char that lets the span pair.
+#   Market-impact prose is full of dollar amounts, so this direction matters
+#   more than recognising the rare `$2 t_i$`, which is reported as undelimited.
+# - The quotation alternative requires the opening `"` NOT to follow a digit,
+#   so an inch/second mark (`6"`) cannot pair with the next real quote and
+#   swallow the text in between.
+_MATH_EXEMPT_SPAN_RE = re.compile(
+    r"```.*?```|~~~.*?~~~|\$\$.*?\$\$|\\\[.*?\\\]|\\\(.*?\\\)"
+    r"|\$(?![\s\d])(?=[^$\n]*[\\\\_^{])[^$\n]*?\$|`[^`\n]+`|(?<!\d)\"[^\"\n]*\"",
+    re.DOTALL,
+)
+
+# A symbol carrying a sub- or superscript. Three shapes, tuned to catch the
+# maths writers actually produce without sweeping up snake_case identifiers:
+#   1. a ONE-char base with any script — `t_i`, `Q^2`, `G_{i,j}`, `Q^(-5/2)`;
+#   2. a TWO-char base, unless the script is a lowercase word — keeps `Re_x`,
+#      drops `is_boilerplate` and `to_date`;
+#   3. a LONGER base whose script starts uppercase / digit / bracket — the
+#      shape spelled-out Greek takes (`sigma_D`, `sigma^{2}`) and that a
+#      snake_case identifier does not. (`Q_nu` needs no rule of its own:
+#      its one-character base already matches alternative 1.)
+_UNDELIMITED_SCRIPT_RE = re.compile(
+    r"(?<![\w\\])(?:"
+    r"[A-Za-zͰ-Ͽ][_^][A-Za-z0-9{(−+-]"
+    r"|[A-Za-zͰ-Ͽ]{2}[_^](?![a-z]{3})[A-Za-z0-9{(−+-]"
+    r"|[A-Za-zͰ-Ͽ]{3,12}[_^][A-Z0-9{(]"
+    r")"
+)
+
+# Maths characters pasted as Unicode instead of written as LaTeX commands.
+# U+00B5 (micro sign) is excluded outright and U+03BC (mu) is exempt before an
+# ASCII letter, so unit strings like `100 µm` / `5 μs` stay plain text.
+_UNICODE_MATH_RE = re.compile(
+    r"[Α-Ωα-λν-ω]"
+    r"|μ(?![A-Za-z])"
+    r"|[−≈∝∼≃≅≤≥≠±∓"
+    r"×÷∫∑∏√∞∂∇⟨⟩⋅]"
+)
+
+MATH_WARNING_EXAMPLES = 5
+
+
+def _undelimited_math_findings(body: str) -> list[dict]:
+    """Count mathematical notation left outside a math region in the prose."""
+    prose = _MATH_EXEMPT_SPAN_RE.sub(
+        lambda m: " " * (m.end() - m.start()), _strip_references_section(body)
+    )
+    hits = sorted(
+        [(m.start(), m.group(0)) for m in _UNDELIMITED_SCRIPT_RE.finditer(prose)]
+        + [(m.start(), m.group(0)) for m in _UNICODE_MATH_RE.finditer(prose)]
+    )
+    if not hits:
+        return []
+    examples = [
+        " ".join(prose[max(0, pos - 30): pos + 30].split())
+        for pos, _ in hits[:MATH_WARNING_EXAMPLES]
+    ]
+    return [
+        {
+            "path": "body_markdown",
+            "code": "undelimited_math",
+            "message": (
+                f"{len(hits)} mathematical symbol(s) in prose are not inside a "
+                "math region; KaTeX renders only `$...$` / `$$...$$` / "
+                "`\\(...\\)` / `\\[...\\]`, so these appear as literal text. "
+                "Delimit every symbol, subscript, superscript and relation, "
+                "and write maths characters as LaTeX commands "
+                "(`\\sigma`, `\\approx`, `\\propto`) rather than pasting "
+                f"Unicode. First occurrences: {examples}"
+            ),
+        }
+    ]
+
+
 def validate_response_data(draft_data: dict, response_data: dict) -> dict:
     """Run every check on raw draft + response dicts. Does not touch disk.
 
@@ -507,6 +681,12 @@ def _run_checks(
             )
         else:
             structural.setdefault("no_stray_machinery", True)
+
+        # Presentation signal (warning only): maths left outside a math region
+        # renders as literal text. Does not flip ``ok``.
+        math_findings = _undelimited_math_findings(response.body_markdown)
+        warnings.extend(math_findings)
+        structural["math_delimited"] = not math_findings
 
     # --- Quote grounding ------------------------------------------------
     if draft is not None and response is not None:

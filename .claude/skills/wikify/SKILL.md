@@ -121,15 +121,27 @@ targets to the plan in order, removing them from later bands.
    `recall.recall_ok` is false AND the gather did not report
    `stop_reason: "pool_exhausted"` (a genuinely mined-out slug), DEFER the write and
    dispatch a targeted GROW that pulls `recall.missing_docs` (the corpus's
-   most-relevant papers this page skips), fills any `recall.empty_buckets`
+   most-relevant papers this page skips), fills any *enforced*
+   `recall.empty_buckets`
    (a missing era), and reduces `recall.max_doc_share` (over-concentration
-   on one doc). Pull those `recall.missing_docs` DIRECTLY, not by generic re-search: for each missing doc run `corpus find --in-doc <doc>` (scored for the concept) to get its best chunks and route them through the vetter, or `wikify work notebook-init <slug> --seed-docs '[<missing ids>]'` then `wikify work build-evidence <slug>` -- capped to the named docs -- so the specific papers the gate identified are retrieved deterministically. Then record the clearance so commit can enforce it:
+   on one doc). The era criterion is enforced only when
+   `recall.year_gate_applied` is true — below `recall.year_coverage` 0.6
+   (a corpus of arXiv/SSRN PDFs with `documents.year` mostly null) the
+   buckets are still reported but do NOT hold `recall_ok` false, because they
+   rest on too small a dated slice to describe the page's breadth. Do not
+   chase `empty_buckets` when that flag is false; backfill the metadata
+   instead.
+   Pull those `recall.missing_docs` DIRECTLY, not by generic re-search: for each missing doc run `corpus find --in-doc <doc>` (scored for the concept) to get its best chunks and route them through the vetter, or `wikify work notebook-init <slug> --seed-docs '[<missing ids>]'` then `wikify work build-evidence <slug>` -- capped to the named docs -- so the specific papers the gate identified are retrieved deterministically. Then record the clearance so commit can enforce it:
    `wikify run record-event --type page_recall_cleared --stage write
    --concept-id <slug> --run <bundle> --data '{"recall_ok": true}'` (or
    `{"exhausted": true}`). Only write once `recall.recall_ok` OR the sweep
    is `pool_exhausted` — the article analogue of the DATA-wave recall gate.
    Finalize this loop's article commits with `wikify draft finalize <slug>
-   --require-recall` — it refuses to commit an article without a FRESH
+   --require-recall` (the create/gap commits in this loop pass it; the
+   REFINE drain deliberately does not, because a refine candidate is by
+   definition a committed slug that gained evidence after its last
+   clearance, so its clearance is stale by construction) — it refuses to
+   commit an article without a FRESH
    `page_recall_cleared` record (recall_ok or exhausted, and no evidence
    added to the slug since the clearance). This enforces the gate for the
    wikify loop, which ALWAYS passes the flag; a bare `draft finalize`
@@ -179,7 +191,15 @@ targets to the plan in order, removing them from later bands.
    true is the degenerate loop that freezes the roster far below
    `expected_pages` and never opens the PERSON gate. Seed from the top-K
    uncovered PageRank docs, where K is `max(waves.seed_deficit,
-   wave_size)`. Run SEED as a SINGLE
+   wave_size)`. **Check `sense.degenerate_metrics` first.** When it lists
+   `document.pagerank`, the citation graph never resolved and nearly every
+   doc shares one baseline value — the PageRank ordering is then just
+   alphabetical order wearing a ranking's clothes, and it will present
+   off-topic papers as the corpus's most central work. In that case seed
+   on RELEVANCE instead (`corpus find` against the wiki's topic, or
+   `corpus sample --strategy diverse --pagerank-weight 0`), and record the
+   fallback as an `editor_ruling` event. `corpus check` reports the same
+   signal. Run SEED as a SINGLE
    **P1** Task over the doc list (not one task per doc): P1 tasks
    *create* slugs, and two docs often yield the same concept, so
    parallel SEED tasks would race on the same slug folder and violate
@@ -275,6 +295,27 @@ one half-size SEED+GAP wave before terminating.
 
 ### 3. DISPATCH
 
+**Before dispatching a writer, build its draft with `--with-adjacent`**
+(`wikify draft build <slug> --task create --with-adjacent --corpus
+<corpus> --run <bundle> --format json`) and read `promotion_candidates`.
+Each entry names a marker whose ADJACENT window holds an equation or
+table the cited chunk only refers to: relevance ranks the prose that
+DESCRIBES a result above the formula that STATES it, so a paper's fitted
+coefficient or closed form routinely lands one chunk outside the evidence
+window, where the citation rule forbids quoting it. Each entry carries
+`promote_chunk_ids` — the neighbour ids themselves — so the fix is
+mechanical: `wikify work build-evidence <slug> --from-ids
+<promote_chunk_ids> --corpus <corpus> --run <bundle>`, then rebuild
+the draft BEFORE spawning the writer. Skipping this ships pages whose
+theory sections are strong and whose calibration sections have no numbers.
+
+**A promotion re-stales the recall clearance.** `build-evidence` self-emits
+`evidence_added`, and `draft finalize --require-recall` only accepts a
+`page_recall_cleared` that is LATER in the ledger than the slug's last
+`evidence_added`. So any promotion here (and any `work tend` drain that
+touches the slug) invalidates a clearance recorded earlier in DECIDE.
+Re-record it after the last evidence lands and before finalize.
+
 For each plan entry, spawn one `Task` (sonnet tier) bound to
 `explore` for explore Tasks or `write-page`
 for the write wave. Pass `pattern`, `target`, `budget_chunks`, `depth`
@@ -335,22 +376,28 @@ wikify run record-event --type pattern_dispatched \
 `record-event` reads the payload from `--data` (JSON object); pass
 `--from-stdin` only when you deliberately pipe the payload. Each round
 MUST emit `round_started` (`--data '{"round": N}'`) BEFORE that round's
-explore/write Tasks, and in CONSOLIDATE one `evidence_added`
-(`--concept-id <slug>`) per slug that gained evidence. `_growth_stalled`
+explore/write Tasks. `_growth_stalled`
 (and thus the maturity gate) derives a slug's last-evidence round from
 the ORDER of its `evidence_added` events relative to `round_started`
 markers, so emission order is what matters — the `evidence_added`
 payload's own `round` is not read and is optional. `round_started`,
 `round_completed`, and `pattern_dispatched` ARE rejected without a
-non-negative integer `round`. `work add evidence --round N` emits the
-`evidence_added` event for you.
+non-negative integer `round`.
 
-`wikify work build-evidence` (the deterministic gather used by the
-PERSON wave, dedup folds, and `extract-data`/`gather-evidence` commits)
-does NOT self-emit `evidence_added`. The editor MUST emit one per slug
-grown that way in CONSOLIDATE (e.g. `wikify work add evidence <slug>
---round N`), or `_growth_stalled` never sees the new evidence, the gate
-holds the slug in `stalled`, and it never reaches `ready`.
+Every command that appends evidence self-emits `evidence_added` when the
+slug actually grew, so CONSOLIDATE needs no follow-up call. `work add
+evidence` and `work build-evidence` key off the records they append;
+`work tend` keys off NET growth, because it dedups later in the same pass
+and a re-suggested chunk must not reset the stall timer.
+That is all three of them: `wikify work add evidence`, `wikify work
+build-evidence` (the deterministic gather used by the PERSON wave, dedup
+folds, and `extract-data`/`gather-evidence` commits), and `wikify work
+tend` (the inbox drain, which appends `evidence_suggestions` to their
+target slugs). Do NOT emit a duplicate by hand: a spurious
+`evidence_added` resets the slug's stall timer for a round it did not
+grow and holds it out of `ready`. Use `wikify run record-event --type
+evidence_added --concept-id <slug>` only for growth that reached
+`evidence.jsonl` through none of the three.
 
 Stages: `explore` for P1-P5 waves, `write` for the write wave, `data` for
 the DATA wave (harvest + consolidate). DATA-wave Tasks bind to
@@ -507,9 +554,8 @@ When invoked on a bundle that already has `round_completed` events:
      claim-density ordering and front-matter rejection then keep substance
      over blurb. GROW each matching slug with those chunk ids:
      `wikify work build-evidence <slug> --from-ids <ids> --corpus <corpus>
-     --run <bundle>`, then emit the growth event `wikify work add evidence
-     <slug> --round <N> --run <bundle>` (build-evidence does not self-emit
-     it). A committed slug that gains evidence becomes a `refine-candidate`
+     --run <bundle>`, which self-emits the `evidence_added` growth event.
+     A committed slug that gains evidence becomes a `refine-candidate`
      and the REFINE wave rewrites its page to cover and cite the new work;
      an uncommitted slug advances toward its gate. One rich doc routes its
      distinct findings to MANY slugs — do not stop at the first match.
@@ -585,10 +631,10 @@ evidence markers:
          --corpus <corpus> --run <bundle>
    ```
 
-3. `build-evidence` does not self-emit the growth event and the gate needs
-   a fresh clearance, so record both before finalizing: `wikify work add
-   evidence <slug> --round <N> --run <bundle>` (emits `evidence_added`),
-   then `wikify run record-event --type page_recall_cleared --stage write
+3. `build-evidence` already emitted the growth event, but the gate needs a
+   clearance that is FRESH (later in the ledger than the last
+   `evidence_added`), so record it after the gather and before finalizing:
+   `wikify run record-event --type page_recall_cleared --stage write
    --concept-id <slug> --run <bundle> --data '{"exhausted": true, "reason":
    "p5_gap_anchor_synthesis"}'`.
 4. Write it through the normal write gate (writer subagent -> `draft check`
@@ -682,9 +728,9 @@ titles), reading only titles and previews — never chunk bodies.
 The merge-execution commands (evidence fold, alias carry, tombstone
 event) are in `references/dedup.md`. A `merged` / `parked` / `dropped`
 card never re-enters `ready` / `growing`. The fold runs through
-`build-evidence`, which does NOT self-emit `evidence_added` — emit one
-for the canonical slug in CONSOLIDATE (see Hard Rules). **If either
-page is already committed**, do NOT hand-edit — run `refine`.
+`build-evidence`, which self-emits `evidence_added` for the canonical
+slug. **If either page is already committed**, do NOT hand-edit — run
+`refine`.
 
 ## Sizing and defaults
 
@@ -722,10 +768,57 @@ explorer/writer M, classifier S; claim owner `investigate`, TTL 1800 s.
   `refine` for that.
 - **Cost curves are invalid without `type="call"` events.** Always
   record per Task.
-- **Emit `evidence_added` for every slug grown via `build-evidence`.**
-  That command (PERSON wave, dedup folds, ledger commits) does not
-  self-emit the event the growth-stall gate keys off; without it the
-  slug stays `stalled` and never reaches `ready`.
+- **Never hand-emit `evidence_added` for a slug grown via `work add
+  evidence`, `build-evidence`, or `work tend`.** All three self-emit the
+  event the growth-stall gate keys off; a duplicate resets the slug's
+  stall timer for a round it did not grow and holds it out of `ready`.
+  All three also re-stale a `page_recall_cleared` clearance, which
+  `draft finalize --require-recall` requires to be newer than the last
+  `evidence_added` — re-record the clearance after the last evidence
+  lands.
+- **Check the exit status of every command in a batch loop.** A
+  `subprocess.run(...)` whose `returncode` / output is discarded turns a
+  systematically failing call into an invisible one.
+- **Never assert a figure, a value, or a chunk location in a subagent
+  brief.** You do not read chunk text, so anything you "know" about a
+  chunk came second-hand from another agent's summary and is unverified.
+  Name the chunk id, label the claim **unverified**, and instruct the
+  agent to ground what the text actually says and report any
+  discrepancy. A brief that states "chunk X reports delta = 0.540" turns
+  one agent's error into a fabricated citation.
+- **Verify rendered output before reporting a render defect.** Load the
+  page and count the elements (`.katex`, `<table>`, `<img>`). Grepping
+  the markdown source proves nothing: the pipeline rewrites `$...$` to
+  `\(...\)` via `arithmatex`, so "the equations were stripped" is what a
+  source grep looks like on a working render.
+- **Never repeat a subagent's complaint as fact without checking it.** A
+  reported defect is a hypothesis. Confirm it against the artifact
+  before acting; "the row labels are unreadably long" may describe
+  labels whose every clause is load-bearing.
+- **`draft finalize` is one-shot per slug.** It consumes `draft.json`,
+  so a second call reports `draft_not_found` — which means the page
+  committed, not that it failed. Never pipe finalize output twice (once
+  to count, once to grep); capture it into a variable and read it twice.
+- **Record call telemetry every round, in the round it happened.**
+  Backfilling later leaves the budget stop-condition dead and
+  `budget_spent_haiku_eq` reading 0 for the rounds it was missing.
+- **Give every concurrent subagent its own scratchpad directory.** A
+  shared `chunk_ids.txt` or `build_response.py` gets overwritten
+  mid-sweep, or re-executed against the wrong slug. Scope scratch paths
+  by slug (`<run>/scratch/<slug>/`), never by filename alone.
+- **Subagents must never edit `claims.db` or committed markdown
+  directly.** A gate that blocks a submission is information, not an
+  obstacle: route the fix through the supported command (`data relabel`,
+  `data reindex`, `refine`) or let the submission fail loudly and record
+  why.
+- **Record a "thin evidence" ruling explicitly.** When the corpus
+  genuinely supports only a few documents for a page, ship it with the
+  non-blocking `evidence_underuse` warning and emit `wikify run
+  record-event --type editor_ruling --concept-id <slug> --data
+  '{"ruling": "thin_evidence", "n_docs": <k>, "reason": "..."}'`. Do NOT
+  pad with acknowledgment lines ("we thank X for discussions") — that is
+  fabricated attribution. Record every such decision, not just some, so
+  the set is auditable.
 
 ## Inspection Loop
 

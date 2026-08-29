@@ -734,6 +734,82 @@ def test_build_evidence_from_ids_appends_valid(tmp_path: Path) -> None:
     assert stats["rejected_boilerplate"] == 0
 
 
+def test_build_evidence_names_the_excluded_kind_rejection(tmp_path: Path) -> None:
+    """Content that exists only in a caption/references chunk cannot be
+    cited. That is defensible, but the aggregate counter made it look like a
+    missing chunk, so callers re-searched for text that was right there."""
+    bundle, corpus_root, ids = _build_evidence_bundle(tmp_path)
+    result = runner.invoke(
+        app,
+        [
+            "work", "build-evidence", "atomic-layer-deposition",
+            "--run", str(bundle),
+            "--corpus", str(corpus_root),
+            "--from-ids", f"{ids['caption']},{ids['ok_a']}",
+            "--format", "json",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.output)
+    assert data["appended"] == 1  # the body chunk still lands
+
+    rejected = {r["chunk_id"]: r for r in data["rejections"]}
+    assert set(rejected) == {ids["caption"]}
+    entry = rejected[ids["caption"]]
+    assert entry["reason"] == "rejected_excluded_kind"
+    assert entry["section_type"] == "caption"
+    # The message must say the chunk EXISTS so the caller stops re-searching.
+    assert "EXISTS" in entry["message"]
+    assert "do not re-search" in entry["message"]
+
+
+def test_build_evidence_self_emits_evidence_added(tmp_path: Path) -> None:
+    """The growth-stall maturity gate keys off ``evidence_added``, and the
+    only command that emitted it required ``--records``. A slug grown through
+    ``build-evidence`` read as permanently stalled. Since ``growth_stalled`` is
+    a gate that must be True, an article slug that met the other gates skipped
+    its settle round entirely and the grow -> settle -> write pacing vanished."""
+    from wikify.api import Bundle as BundleApi
+    from wikify.bundle.run.events import read_events
+
+    bundle, corpus_root, ids = _build_evidence_bundle(tmp_path)
+    b = BundleApi.open(bundle)
+    assert not [e for e in read_events(b) if e.type == "evidence_added"]
+
+    result = runner.invoke(
+        app,
+        [
+            "work", "build-evidence", "atomic-layer-deposition",
+            "--run", str(bundle),
+            "--corpus", str(corpus_root),
+            "--from-ids", f"{ids['ok_a']},{ids['ok_b']}",
+            "--format", "json",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+
+    grown = [e for e in read_events(b) if e.type == "evidence_added"]
+    assert len(grown) == 1
+    assert grown[0].concept_id == "atomic-layer-deposition"
+    assert grown[0].data["n"] == 2
+    assert grown[0].data["source"] == "build-evidence"
+
+    # A gather that appends nothing must NOT emit — an event for a round the
+    # slug did not grow would reset its stall timer and hold it out of `ready`.
+    rejected = runner.invoke(
+        app,
+        [
+            "work", "build-evidence", "atomic-layer-deposition",
+            "--run", str(bundle),
+            "--corpus", str(corpus_root),
+            "--from-ids", ids["boilerplate"],
+            "--format", "json",
+        ],
+    )
+    assert rejected.exit_code != 0
+    assert len([e for e in read_events(b) if e.type == "evidence_added"]) == 1
+
+
 def test_build_evidence_seeds_from_notebook_seed_docs(tmp_path: Path) -> None:
     """Seeds set via ``notebook-init --seed-docs`` persist on the notebook
     provenance, not the work card. build-evidence must union them so the
@@ -2043,6 +2119,47 @@ def test_concept_recall_missing_then_covered(tmp_path: Path) -> None:
     assert recall["recall_ok"] is True
     # Represented chunks span multiple section types (diversity signal).
     assert len(recall["section_types_represented"]) >= 3
+
+
+def test_concept_recall_era_gate_skipped_without_year_metadata(tmp_path: Path) -> None:
+    """With `documents.year` null across the corpus the era buckets are
+    computed over a slice too small to mean anything, and a represented-but-
+    undated doc can never fill one — so `empty_buckets` reported a failure the
+    caller had no way to clear, forcing `exhausted: true` bypasses."""
+    from wikify.api import Bundle as BundleApi
+    from wikify.api import Corpus
+    from wikify.bundle.work.evidence import EvidenceRecord, append_evidence
+    from wikify.corpus.store import Store, transaction
+
+    bundle, corpus_root, docs = _recall_bundle(tmp_path)
+    bundle_api = BundleApi.open(bundle)
+
+    # Strip the year from every doc but the earliest, mirroring an arXiv/SSRN
+    # corpus where only a handful of PDFs carry parseable metadata.
+    store = Store(Corpus(root=corpus_root).sqlite_path)
+    try:
+        with transaction(store.con):
+            store.con.execute(
+                "UPDATE documents SET year = NULL, metadata_json = '{}' "
+                "WHERE doc_id != 'doc_2010'"
+            )
+    finally:
+        store.close()
+
+    # Cover enough docs and stay under the concentration cap, but never touch
+    # the only dated doc — so its bucket is empty.
+    for did in ("doc_2012", "doc_2015", "doc_2018", "doc_2021"):
+        cid, _ = docs[did]
+        append_evidence(
+            bundle_api, "photonics",
+            [EvidenceRecord(chunk_id=cid, doc_id=did, status="active")],
+        )
+
+    recall = _run_recall(bundle, corpus_root)["recall"]
+    assert recall["year_coverage"] == 0.2  # 1 of 5 candidates dated
+    assert recall["year_gate_applied"] is False
+    assert recall["empty_buckets"]  # still REPORTED, just not enforced
+    assert recall["recall_ok"] is True
 
 
 def test_concept_recall_max_doc_share_blocks(tmp_path: Path) -> None:

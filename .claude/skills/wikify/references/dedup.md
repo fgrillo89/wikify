@@ -49,9 +49,8 @@ wikify run record-event --type concept_status_changed --concept-id <dup> \
 
 A `merged` (also `parked`, `dropped`) card never re-enters `ready` /
 `growing`, so WRITE/GROW skip it and it does not hold the stop check
-open. The `build-evidence` fold does NOT self-emit an `evidence_added`
-event, so emit one for `<canonical>` in this round's CONSOLIDATE (see
-Hard Rules) or the merged-in evidence will not count toward its
-growth-stall timer. **If either page is already committed**, do NOT
+open. The `build-evidence` fold self-emits an `evidence_added` event for
+`<canonical>`, so the merged-in evidence counts toward its growth-stall
+timer with no follow-up call. **If either page is already committed**, do NOT
 hand-edit — run `refine` to redirect/fold (committed pages are repaired
 only through refine).

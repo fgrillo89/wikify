@@ -208,6 +208,178 @@ def test_check_corpus_basic(small_corpus: Corpus) -> None:
     assert len(summary["fingerprint"]) == 16
 
 
+def test_degenerate_ranking_metric_is_reported(make_sqlite_corpus) -> None:
+    """With an unresolved citation graph every document keeps the same
+    baseline PageRank, so "top-K by PageRank" silently degrades to alphabetical
+    order and surfaces off-topic papers as the corpus's most central work."""
+    from wikify.corpus.store.routing import open_store
+
+    corpus = make_sqlite_corpus(_build_docs(12))
+    store = open_store(corpus.root)
+    try:
+        doc_ids = [r[0] for r in store.con.execute("SELECT doc_id FROM documents")]
+        store.con.executemany(
+            "INSERT OR REPLACE INTO node_metrics"
+            "(graph_name, node_type, node_id, metric, value, computed_at) "
+            "VALUES ('corpus_citation', 'document', ?, ?, ?, '2026-01-01T00:00:00Z')",
+            [(d, "pagerank", 0.0833333) for d in doc_ids]
+            # A healthy metric on the same nodes must NOT be flagged.
+            + [(d, "citation_count", float(i)) for i, d in enumerate(doc_ids)]
+            # ...nor a tied metric that no caller can ORDER BY. Several stored
+            # metrics are constant by construction (a chunk's in_degree is
+            # always 1 — it belongs to one document), so checking every metric
+            # would bury the one signal that matters under permanent noise.
+            + [(d, "in_degree", 1.0) for d in doc_ids],
+        )
+        store.con.commit()
+        flagged = queries.degenerate_ranking_metrics(store.con)
+    finally:
+        store.close()
+
+    by_metric = {d["metric"]: d for d in flagged}
+    assert set(by_metric) == {"pagerank"}
+    assert by_metric["pagerank"]["n_nodes"] == 12
+    assert by_metric["pagerank"]["n_distinct_values"] == 1
+    assert by_metric["pagerank"]["tied_share"] == 1.0
+    assert by_metric["pagerank"]["n_ranked_above_tie"] == 0
+    assert by_metric["pagerank"]["node_type"] == "document"
+
+    assert queries.check_corpus(corpus)["degenerate_metrics"] == flagged
+
+
+def test_degenerate_head_threshold_matches_the_documented_ceiling() -> None:
+    """Pin `_DEGENERATE_MIN_DISTINGUISHED` to the largest top-K a caller takes.
+
+    Nothing pinned it before, so changing it left the whole suite green while
+    the agent-facing reference kept quoting the old number. The constant is
+    only meaningful as "the biggest wave a caller can fill", so it is asserted
+    against the real ceilings rather than against a literal.
+    """
+    import re
+
+    from wikify.cli.run import _sizing_knobs
+
+    # `wave_size` is the widest top-K any caller takes; `corpus find --top-k`
+    # defaults lower still.
+    widest_wave = max(
+        _sizing_knobs(n_docs, n_chunks=0)["wave_size"]
+        for n_docs in (1, 100, 1_000, 100_000)
+    )
+    assert queries._DEGENERATE_MIN_DISTINGUISHED == widest_wave
+
+    # ...and the reference doc must quote the same number.
+    doc = (
+        Path(__file__).resolve().parents[2]
+        / ".claude/skills/wikify/subskills/search-corpus/references"
+        / "corpus-cli-patterns.md"
+    ).read_text(encoding="utf-8")
+    quoted = {int(n) for n in re.findall(r"fewer than (\d+) (?:nodes|documents)", doc)}
+    assert quoted, "the reference doc no longer quotes the threshold"
+    assert quoted == {widest_wave}, quoted
+
+
+def test_a_well_spread_head_is_not_degenerate(make_sqlite_corpus) -> None:
+    """What rescues a metric is a HEAD a top-K can fill, not the position of
+    its tied block. `refresh_citation_count` writes a row per document via
+    COALESCE(..., 0), so most documents sit at 0; that huge bottom block is
+    harmless as long as enough documents outrank it. Flagging it anyway would
+    steer the editor off citation seeding on a healthy corpus."""
+    from wikify.corpus.store.routing import open_store
+
+    corpus = make_sqlite_corpus(_build_docs(2))
+    store = open_store(corpus.root)
+    try:
+        # 216 docs: 200 tied at 0.0 (92.6% — comfortably over the share
+        # threshold) but 16 with distinct nonzero counts above them.
+        values = [0.0] * 200 + [float(i + 1) for i in range(16)]
+        store.con.executemany(
+            "INSERT OR REPLACE INTO node_metrics"
+            "(graph_name, node_type, node_id, metric, value, computed_at) "
+            "VALUES ('corpus_citation', 'document', ?, 'citation_count', ?, 'x')",
+            [(f"s{i}", v) for i, v in enumerate(values)],
+        )
+        store.con.commit()
+        flagged = queries.degenerate_ranking_metrics(store.con)
+    finally:
+        store.close()
+    assert flagged == []
+
+    # ...and the SAME shape with too thin a head IS flagged: a top-K there is
+    # mostly alphabetical padding, which is the whole point of the check.
+    store = open_store(corpus.root)
+    try:
+        store.con.execute(
+            "DELETE FROM node_metrics WHERE metric='citation_count' AND value > 2.0"
+        )
+        store.con.commit()
+        thin = queries.degenerate_ranking_metrics(store.con)
+    finally:
+        store.close()
+    assert [d["metric"] for d in thin] == ["citation_count"]
+    assert thin[0]["n_ranked_above_tie"] == 2
+
+
+def test_partially_resolved_ranking_is_still_degenerate(make_sqlite_corpus) -> None:
+    """One resolved citation among 200 documents leaves 199 tied on the
+    baseline. Measuring ties only at the MAX would miss it, yet a top-K still
+    exhausts the single distinguished node and pads the rest alphabetically."""
+    from wikify.corpus.store.routing import open_store
+
+    corpus = make_sqlite_corpus(_build_docs(2))
+    store = open_store(corpus.root)
+    try:
+        values = [0.9] + [0.004] * 199
+        store.con.executemany(
+            "INSERT OR REPLACE INTO node_metrics"
+            "(graph_name, node_type, node_id, metric, value, computed_at) "
+            "VALUES ('corpus_citation', 'document', ?, 'pagerank', ?, 'x')",
+            [(f"s{i}", v) for i, v in enumerate(values)],
+        )
+        store.con.commit()
+        flagged = queries.degenerate_ranking_metrics(store.con)
+    finally:
+        store.close()
+    assert len(flagged) == 1
+    assert flagged[0]["metric"] == "pagerank"
+    assert flagged[0]["n_distinct_values"] == 2
+    assert flagged[0]["tied_share"] == 0.995
+    assert flagged[0]["n_ranked_above_tie"] == 1
+
+
+def test_text_defect_counts_flag_unquotable_chunks(make_sqlite_corpus) -> None:
+    """A dropped ligature leaves a control char mid-word (`di\\x0fusivity`)
+    and a soft hyphen splits an ordinary word (`real\\xadworld`). A writer
+    retypes the word as rendered, so the span can never ground — report the
+    scale before dispatching writers."""
+    from wikify.corpus.store.routing import open_store
+
+    corpus = make_sqlite_corpus(_build_docs(2))
+    store = open_store(corpus.root)
+    try:
+        ids = [r[0] for r in store.con.execute(
+            "SELECT chunk_id FROM chunks ORDER BY chunk_id"
+        )]
+        store.con.execute(
+            "UPDATE chunks SET text = 'measured the di\x0fusivity directly' "
+            "WHERE chunk_id = ?", (ids[0],)
+        )
+        store.con.execute(
+            "UPDATE chunks SET text = 'a real­world deployment' "
+            "WHERE chunk_id = ?", (ids[1],)
+        )
+        store.con.commit()
+    finally:
+        store.close()
+
+    defects = queries.check_corpus(corpus, full=True)["text_defects"]
+    assert defects == {
+        "chunks_with_control_chars": 1,
+        "chunks_with_soft_hyphens": 1,
+    }
+    # The cheap default form does not pay for the scan.
+    assert "text_defects" not in queries.check_corpus(corpus)
+
+
 def test_storage_reads_documents_from_sqlite(make_sqlite_corpus) -> None:
     corpus = make_sqlite_corpus(_build_docs(3))
 
@@ -336,7 +508,7 @@ def test_find_rejects_missing_query(small_corpus: Corpus) -> None:
 def test_find_queryless_pagerank_returns_docs_ordered_by_pr(
     small_corpus: Corpus, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """query-less --rank pagerank returns kind='docs' ordered by descending pagerank."""
+    """Query-less --rank pagerank returns kind='docs' ordered by descending pagerank."""
     _all_rows = [
         {"doc_id": "paper_0", "title": "Title 0", "citation_count": 0, "pagerank": 0.05},
         {"doc_id": "paper_1", "title": "Title 1", "citation_count": 0, "pagerank": 0.20},
@@ -373,7 +545,7 @@ def test_find_queryless_pagerank_returns_docs_ordered_by_pr(
 def test_find_queryless_citation_count_returns_docs_ordered_by_cites(
     small_corpus: Corpus, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """query-less --rank citation_count returns kind='docs' ordered by descending cites."""
+    """Query-less --rank citation_count returns kind='docs' ordered by descending cites."""
     _all_rows = [
         {"doc_id": "paper_0", "title": "Title 0", "citation_count": 42, "pagerank": 0.0},
         {"doc_id": "paper_1", "title": "Title 1", "citation_count": 7, "pagerank": 0.0},
@@ -453,7 +625,7 @@ def test_traverse_rejects_bad_handle_kind(small_corpus: Corpus) -> None:
 def test_traverse_doc_chunks_returns_document_order_with_section(
     small_corpus: Corpus,
 ) -> None:
-    """doc -> chunks must be ordered by ``ord`` and carry section_path."""
+    """Doc -> chunks must be ordered by ``ord`` and carry section_path."""
     rows = queries.traverse_doc(
         small_corpus, doc_id="paper_0", relation="chunks",
     )

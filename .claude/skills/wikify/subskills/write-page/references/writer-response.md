@@ -27,6 +27,11 @@ Every in-prose `[^eN]` marker must have exactly one matching definition:
 [^eN]: <chunk_id> (<doc_id>) > "<verbatim quote>"
 ```
 
+`N` is a 1-based INDEX into `draft.json`'s `evidence` array, not a free
+label, so `<chunk_id>` must be `evidence[N-1].chunk_id`. The validator
+cross-checks the two and rejects a disagreement as
+`marker_evidence_mismatch`, naming both indices.
+
 The writer must not invent chunk ids, doc ids, quotes, figures, or
 equations.
 

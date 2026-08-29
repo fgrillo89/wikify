@@ -49,6 +49,34 @@ _SPACED_THOUSANDS_RE = re.compile(
 _THOUSANDS_SPACE_RE = re.compile(r"[   ]")
 
 
+# An OCR-spaced decimal point: a period separated from its digits by
+# whitespace on either side (``0 . 549``, ``0. 549``, ``79 .13``).
+#
+# This shape is genuinely AMBIGUOUS - the identical text in "our sample runs
+# to 2005. 12 of the 30 stocks" is a sentence boundary, and no amount of
+# whitespace bookkeeping separates the two cases.
+#
+# This pattern is the VALUE-side one, used only by ``parse_leading_number``,
+# and it substitutes DESTRUCTIVELY: a wrong guess here erases a number. That
+# is acceptable because a ``value_text`` / ``value_original`` is a short,
+# extractor-authored field that does not contain sentences. Prose is read
+# through ``_PROSE_SPACED_DECIMAL_RE`` instead, which ``verify._numbers``
+# unions with the literal reading and bounds by magnitude precisely because
+# there a wrong guess WOULD erase a real number.
+_SPACED_DECIMAL_RE = re.compile(r"(?<=\d)[ \t   ]*\.[ \t   ]*(?=\d)")
+# The same shape read out of PROSE, where a period between two digits is far
+# more often a sentence boundary ("runs to 2005. 12 of the 30 stocks") than a
+# mangled decimal. Requiring whitespace BEFORE the period excludes that shape:
+# a sentence-ending period is attached to the word it terminates. It does not
+# resolve the ambiguity (``2005 . 12`` is still indistinguishable from
+# ``0 . 549``) - it just declines the reading that is usually wrong.
+_PROSE_SPACED_DECIMAL_RE = re.compile(
+    r"(?<=\d)[ \t   ]+\.[ \t   ]*(?=\d)"
+)
+# A bare fraction (``1/2``, ``-3 / 4``) and nothing else in the string.
+_BARE_FRACTION_RE = re.compile(r"^\s*([-+−]?)\s*(\d+)\s*/\s*(\d+)\s*$")
+
+
 def collapse_spaced_thousands(s: str) -> str:
     """Join space-separated thousands groups into a single token so the number
     parser reads the correct magnitude: ``10 000 cycles`` -> ``10000 cycles``.
@@ -57,6 +85,20 @@ def collapse_spaced_thousands(s: str) -> str:
     return _SPACED_THOUSANDS_RE.sub(
         lambda m: _THOUSANDS_SPACE_RE.sub("", m.group(1)), s or ""
     )
+
+
+def collapse_number_spacing(s: str, *, in_prose: bool = False) -> str:
+    """Normalize both OCR number-spacing artifacts in one pass: spaced
+    thousands groups and a spaced-out decimal point.
+
+    PDF math extraction routinely spaces a decimal point away from its digits
+    (``0 . 549``, ``79 . 13``), which the number regex reads as two unrelated
+    integers. Applied to the reported value AND to the quote/source before
+    numeric comparison, so a value of ``0.549`` matches a source rendering it
+    as ``0 . 549``.
+    """
+    pattern = _PROSE_SPACED_DECIMAL_RE if in_prose else _SPACED_DECIMAL_RE
+    return pattern.sub(".", collapse_spaced_thousands(s))
 
 
 def normalize_key(text: str) -> str:
@@ -75,12 +117,22 @@ def parse_leading_number(value: str) -> float | None:
     """Best-effort canonical numeric from a value string.
 
     Returns the first number found (handling unicode minus, thousands
-    separators, scientific notation). ``None`` when no number is present
-    (ranges and categoricals keep their text form in ``value_text``).
+    separators, spaced-out decimal points, scientific notation, and a bare
+    fraction such as ``1/2``). ``None`` when no number is present (ranges and
+    categoricals keep their text form in ``value_text``).
     """
     if not value:
         return None
-    m = _NUMBER_RE.search(collapse_spaced_thousands(value))
+    frac = _BARE_FRACTION_RE.match(value)
+    if frac:
+        # Without this the regex stops at the slash and "1/2" parses as 1.0,
+        # storing a value_num an order of magnitude off the reported value.
+        sign, num, den = frac.groups()
+        if den != "0":
+            magnitude = float(num) / float(den)
+            return -magnitude if sign in {"-", "−"} else magnitude
+        return None
+    m = _NUMBER_RE.search(collapse_number_spacing(value))
     if not m:
         return None
     token = (
