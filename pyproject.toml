@@ -134,10 +134,10 @@ torchvision = [
 
 [dependency-groups]
 dev = [
-    "ipykernel>=7.3.0",
+    "ipykernel>=7.4.0",
     "nbconvert>=7.17.1",
     "pytest>=9.1.1",
     "pytest-asyncio>=1.4.0",
     "pytest-cov>=7.0",
-    "ruff>=0.15.21",
+    "ruff>=0.16.9",
 ]
